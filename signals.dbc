@@ -18,8 +18,8 @@ BO_ 166 A6_TorqueCoordination: 8 Vector__XXX
  SG_ T_Act  : 48|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
 
 BO_ 167 A7_AirFuelManagement: 7 Vector__XXX
- SG_ T_Demand   : 12|12@1+ (0.5,-999.5)        [-999.5|1048.0] "Nm" Vector__XXX
- SG_ Phi_Demand : 32|16@1+ (3.0518e-5,0)        [0|1.5]         ""  Vector__XXX
+ SG_ T_Demand : 12|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
+ SG_ A7_Sig2  : 32|16@1+ (1,0)        [0|65535]        ""  Vector__XXX
 
 BO_ 160 A0_TransTorqueBroadcast: 8 Vector__XXX
  SG_ Counter      :  0|16@1+ (1,0)        [0|65535]       ""    Vector__XXX
@@ -32,8 +32,8 @@ BO_ 176 B0_TransTorqueMgmt: 8 Vector__XXX
  SG_ B0_ShiftCeil  : 24|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
  SG_ B0_T3         : 36|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
 
-BO_ 143 X8F_PhiSetpoint: 8 Vector__XXX
- SG_ Phi_Soll : 16|16@1+ (3.0518e-5,0) [0|1.5] "" Vector__XXX
+BO_ 143 X8F_TorqueSignal: 8 Vector__XXX
+ SG_ X8F_Sig1 : 16|16@1+ (1,0) [0|65535] "" Vector__XXX
 
 BO_ 217 D9_PedalPosition: 8 Vector__XXX
  SG_ Pedal_Raw : 16|12@1+ (1,0) [0|4095] "" Vector__XXX

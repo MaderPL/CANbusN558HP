@@ -82,36 +82,15 @@ Net shaft torque = T_Act + T_Loss (T_Loss is already negative).
 
 ---
 
-## Frame 0x0A7 — Air-Fuel Management
+## Frame 0x0A7 — Torque & Unknown Signal
 
-Rate: ~50 Hz
+Rate: ~50 Hz  
+Frame length: 7 bytes.
 
-| Signal     | Offset (bit) | Length (bit) | Scaling              | Unit | Description |
-|------------|-------------|--------------|----------------------|------|-------------|
-| T_Demand   | 12          | 12           | Nm = (raw−1999)/2    | Nm   | Driver demand torque (Fahrerwunschmoment). The raw pedal-derived torque request before coordinator limits are applied. Pearson r = 0.866 with pedal position. Runs 5–10 Nm above T_Act at mid-to-high load; lower than T_Act at idle (idle speed controller manages independently). |
-| Phi_Demand | 32          | 16           | φ = raw / 32768      | —    | **Fuel-air equivalence ratio demand** (φ = 1/λ). The unconstrained fuel enrichment target from the load map. φ = 1.0 → stoichiometric; φ > 1.0 → rich; φ < 1.0 → lean. Actual lambda = 32768 / raw. This signal responds immediately to throttle changes and can exceed the commanded value (0x8F Phi_Soll) at low RPM where injector duty cycle limits delivery. |
-
-### Phi encoding (both 0x0A7 and 0x8F)
-
-```
-phi   = raw / 32768        # Q1.15, fuel-air equivalence ratio (= 1/lambda)
-lambda = 32768 / raw       # actual lambda: <1.0 = rich, >1.0 = lean
-AFR   = lambda × 14.7      # gasoline stoich AFR
-```
-
-Stoichiometric: raw = 32768 → φ = 1.0 → λ = 1.0. Rich mixture: raw > 32768. Lean mixture: raw < 32768.
-
-### Observed Phi_Demand (0x0A7) values
-
-| Condition                    | raw   | φ      | λ     | AFR   |
-|-----------------------------|-------|--------|-------|-------|
-| Light cruise (15% pedal)    | ~32000 | 0.977 | 1.024 | 15.06 |
-| Moderate load (40% pedal)   | ~33000 | 1.007 | 0.993 | 14.60 |
-| WOT 97.7% ped, 3000 RPM    | ~38400 | 1.172 | 0.853 | 12.54 |
-| WOT 97.7% ped, 2000 RPM    | ~43200 | 1.318 | 0.759 | 11.16 |
-| WOT 97.7% ped, 7000 RPM    | ~36600 | 1.117 | 0.895 | 13.16 |
-
-At low RPM WOT (2000 rpm), the map demands very rich mixture (λ ≈ 0.76) during boost build-up. As RPM rises, demand moderates (λ ≈ 0.85–0.90 at 3000–6000 RPM). Light cruise uses lean-burn (λ > 1.0).
+| Signal   | Offset (bit) | Length (bit) | Scaling           | Unit | Description |
+|----------|-------------|--------------|-------------------|------|-------------|
+| T_Demand | 12          | 12           | Nm = (raw−1999)/2 | Nm   | Driver demand torque (Fahrerwunschmoment). The raw pedal-derived torque request before coordinator limits are applied. Pearson r = 0.866 with pedal position. Runs 5–10 Nm above T_Act at mid-to-high load; lower than T_Act at idle (idle speed controller manages independently). |
+| A7_Sig2  | 32          | 16           | TBD               | TBD  | 16-bit torque-related signal. Raw range observed: 31000–43242. At moderate cruise the value is close to T_Demand (O12 L12) within ~20–50 raw counts. At WOT/boost it significantly exceeds T_Demand and T_Act. Encoding and exact physical quantity not yet confirmed. |
 
 ### T_Demand vs T_Act comparison
 
@@ -127,27 +106,28 @@ At high load, T_Demand slightly exceeds T_Act — the driver requests slightly m
 
 ---
 
-## Frame 0x8F — Fuel-Air Ratio Setpoint
+## Frame 0x8F — Unknown Torque Signal
 
 Rate: ~200 Hz (highest rate frame observed)  
-Frame structure: 8 bytes. b0 = CRC/checksum (rapidly varying). b1 = alive counter (0x1X). b4–b7 = constant protocol bytes (0x22 0x00 0x20 0x10).
+Frame structure: 8 bytes. b0 = CRC/checksum (rapidly varying). b1 = alive counter (upper nibble fixed at 0x10, lower nibble cycles). b4–b7 = constant (0x22 0x00 0x20 0x10 — likely protocol/version bytes). Only b2–b3 carry live data.
 
-| Signal    | Offset (bit) | Length (bit) | Scaling          | Unit | Description |
-|-----------|-------------|--------------|------------------|------|-------------|
-| Phi_Soll  | 16          | 16           | φ = raw / 32768  | —    | **Commanded fuel-air equivalence ratio** (φ_soll = 1/λ). The actual fuel enrichment command sent to the injectors, after any delivery constraints are applied. φ = 1.0 = stoichiometric (raw = 32768). Rich (WOT): raw > 32768 (φ > 1.0 → λ < 1.0). Lean cruise: raw < 32768 (φ < 1.0 → λ > 1.0). At high pedal + low RPM, limited below Phi_Demand (0x0A7) by injector capacity. |
+| Signal   | Offset (bit) | Length (bit) | Scaling | Unit | Description |
+|----------|-------------|--------------|---------|------|-------------|
+| X8F_Sig1 | 16          | 16           | TBD     | TBD  | 16-bit torque-related signal. Raw range observed: 30800–36297. Correlates positively with engine load and torque. At moderate cruise, approximately tracks T_Act; at WOT/boost the value significantly exceeds T_Act. The RPM-dependent zero offset and the boost-related excursion suggest this is a different torque quantity than T_Act. Encoding and exact physical quantity not yet confirmed. |
 
-### Phi_Soll (0x8F) vs Phi_Demand (0x0A7) — fuel delivery constraint
+### Observed X8F_Sig1 raw values
 
-| Condition                    | Phi_Soll (8F) λ=32768/r | Phi_Demand (A7) λ=32768/r | Injector-limited? |
-|-----------------------------|------------------------|--------------------------|------------------|
-| Light cruise (15% pedal)    | 0.977 → λ = 1.024      | 0.977 → λ = 1.024         | No (equal)       |
-| WOT 97.7% ped, 3000 RPM    | 1.074 → λ = 0.931      | 1.172 → λ = 0.853         | Yes              |
-| WOT 97.7% ped, 2000 RPM    | 1.039 → λ = 0.963      | 1.319 → λ = 0.758         | Yes (heavily)    |
-| WOT 97.7% ped, 4500 RPM    | 1.049 → λ = 0.953      | 1.063 → λ = 0.941         | Marginal         |
+| Condition                  | Raw    | Notes |
+|---------------------------|--------|-------|
+| Key-on, engine off         | 32000  | Initialization default |
+| Idle (~780 RPM)            | ~32000 | Near default |
+| Light cruise (2000 RPM, 15% ped) | 31760–32000 | Tracks T_Act closely |
+| Moderate load (2050 RPM, 23% ped) | 32300–32350 | Tracks T_Act closely |
+| WOT 39% ped, 3300 RPM     | 33000–33850 | Significantly above T_Act |
+| WOT 97.7% ped, 3000 RPM   | ~35200 | Further above T_Act |
+| WOT 97.7% ped, 2000 RPM   | ~34050 | Above T_Act but less than 3000 RPM value |
 
-At low RPM the injectors reach duty-cycle limits — the map demands λ ≈ 0.76 but the commanded injection quantity only achieves λ ≈ 0.96. As RPM rises, the injectors have more time per cycle to open and the two signals converge. This gap represents the fuel delivery deficit under the N558HP tune at low-RPM WOT.
-
-Observed range: raw 30800–36297 → φ 0.940–1.108 → λ 0.903–1.064.
+The 0x8F signal is always smaller than A7_Sig2 (0x0A7 O32) at the same operating point. Both signals converge toward T_Act at moderate cruise and diverge increasingly at WOT/high boost.
 
 ---
 
@@ -231,14 +211,11 @@ t_cut_nm  = nm(le_bits(raw, 36, 12))  # cut/limit setpoint
 t_act_nm  = nm(le_bits(raw, 48, 12))  # actual indicated torque
 
 # 0x0A7
-t_demand_nm = nm(le_bits(raw, 12, 12))       # driver demand torque
-phi_demand  = le_bits(raw, 32, 16) / 32768   # fuel-air equivalence ratio demand (phi = 1/lambda)
-lam_demand  = 32768 / le_bits(raw, 32, 16)   # lambda = 1/phi (<1.0 = rich at WOT)
-afr_demand  = lam_demand * 14.7
+t_demand_nm = nm(le_bits(raw, 12, 12))   # driver demand torque
+a7_sig2     = le_bits(raw, 32, 16)       # 16-bit torque-related signal (TBD encoding)
 
 # 0x8F
-phi_soll   = le_bits(raw, 16, 16) / 32768    # commanded phi (1/lambda) sent to injectors
-lam_soll   = 32768 / le_bits(raw, 16, 16)    # commanded lambda (<1.0 = rich at WOT)
+x8f_sig1 = le_bits(raw, 16, 16)          # 16-bit torque-related signal (TBD encoding)
 
 # 0x0A0
 t_coord      = nm(le_bits(raw, 16, 12))        # coordination trim to TCU
