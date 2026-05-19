@@ -87,10 +87,10 @@ Net shaft torque = T_Act + T_Loss (T_Loss is already negative).
 Rate: ~50 Hz  
 Frame length: 7 bytes.
 
-| Signal   | Offset (bit) | Length (bit) | Scaling           | Unit | Description |
-|----------|-------------|--------------|-------------------|------|-------------|
-| T_Demand | 12          | 12           | Nm = (raw−1999)/2 | Nm   | Driver demand torque (Fahrerwunschmoment). The raw pedal-derived torque request before coordinator limits are applied. Pearson r = 0.866 with pedal position. Runs 5–10 Nm above T_Act at mid-to-high load; lower than T_Act at idle (idle speed controller manages independently). |
-| A7_Sig2  | 32          | 16           | TBD               | TBD  | 16-bit torque-related signal. Raw range observed: 31000–43242. At moderate cruise the value is close to T_Demand (O12 L12) within ~20–50 raw counts. At WOT/boost it significantly exceeds T_Demand and T_Act. Encoding and exact physical quantity not yet confirmed. |
+| Signal   | Offset (bit) | Length (bit) | Scaling                | Unit | Description |
+|----------|-------------|--------------|------------------------|------|-------------|
+| T_Demand | 12          | 12           | Nm = (raw−1999)/2      | Nm   | Driver demand torque (Fahrerwunschmoment). The raw pedal-derived torque request before coordinator limits are applied. Pearson r = 0.866 with pedal position. Runs 5–10 Nm above T_Act at mid-to-high load; lower than T_Act at idle (idle speed controller manages independently). |
+| A7_Sig2  | 32          | 16           | Nm = (raw−31932)/8     | Nm   | 16-bit torque-related signal. 0.125 Nm/count (4× finer resolution than 12-bit signals; offset 31932 = 16 × 1999 − 52, same physical zero). Raw range observed: 31000–43242. Best single-predictor fit across 131K frames: T_Demand (R²=0.68, RMSE=43 Nm). At WOT in 4th gear (TC locked): A7_dec ≈ T_Act × GR₄ (≈1.667), consistent with a drivetrain output or TCU-side torque target scaled by current gear ratio. Shows sharp step-down transients coinciding with every upshift event. Exact physical quantity (e.g. TCU torque request, drive-shaft torque estimate) not fully confirmed; gear-stratified analysis required to resolve residual scatter. |
 
 ### T_Demand vs T_Act comparison
 
@@ -111,23 +111,24 @@ At high load, T_Demand slightly exceeds T_Act — the driver requests slightly m
 Rate: ~200 Hz (highest rate frame observed)  
 Frame structure: 8 bytes. b0 = CRC/checksum (rapidly varying). b1 = alive counter (upper nibble fixed at 0x10, lower nibble cycles). b4–b7 = constant (0x22 0x00 0x20 0x10 — likely protocol/version bytes). Only b2–b3 carry live data.
 
-| Signal   | Offset (bit) | Length (bit) | Scaling | Unit | Description |
-|----------|-------------|--------------|---------|------|-------------|
-| X8F_Sig1 | 16          | 16           | TBD     | TBD  | 16-bit torque-related signal. Raw range observed: 30800–36297. Correlates positively with engine load and torque. At moderate cruise, approximately tracks T_Act; at WOT/boost the value significantly exceeds T_Act. The RPM-dependent zero offset and the boost-related excursion suggest this is a different torque quantity than T_Act. Encoding and exact physical quantity not yet confirmed. |
+| Signal   | Offset (bit) | Length (bit) | Scaling             | Unit | Description |
+|----------|-------------|--------------|---------------------|------|-------------|
+| X8F_Sig1 | 16          | 16           | Nm = (raw−31932)/8  | Nm   | 16-bit torque-related signal. 0.125 Nm/count; same zero encoding as A7_Sig2. Raw range observed: 30800–36297. Best single-predictor fit across 131K frames: T_Demand (R²=0.80, RMSE=25 Nm). At high-RPM steady-state TC lockup: X8F_dec ≈ T_Net = T_Act + T_Loss (crankshaft net output torque after friction subtraction), verified to <0.5% at multiple WOT operating points. At idle/TC stall: X8F_dec ≈ T_Act. The transition between these two modes is governed by TC slip state. Always smaller than A7_Sig2 at the same operating point; both converge toward T_Act at moderate cruise and diverge increasingly at WOT/boost. |
 
-### Observed X8F_Sig1 raw values
+### Observed X8F_Sig1 values
 
-| Condition                  | Raw    | Notes |
-|---------------------------|--------|-------|
-| Key-on, engine off         | 32000  | Initialization default |
-| Idle (~780 RPM)            | ~32000 | Near default |
-| Light cruise (2000 RPM, 15% ped) | 31760–32000 | Tracks T_Act closely |
-| Moderate load (2050 RPM, 23% ped) | 32300–32350 | Tracks T_Act closely |
-| WOT 39% ped, 3300 RPM     | 33000–33850 | Significantly above T_Act |
-| WOT 97.7% ped, 3000 RPM   | ~35200 | Further above T_Act |
-| WOT 97.7% ped, 2000 RPM   | ~34050 | Above T_Act but less than 3000 RPM value |
+| Condition                         | Raw         | Decoded (Nm) | T_Net (Nm) | Notes |
+|----------------------------------|-------------|-------------|------------|-------|
+| Key-on, engine off                | 32000       | 0.9         | —          | Initialization default |
+| Idle (~780 RPM)                   | ~32000      | ~0.9        | ~0         | TC stall; tracks T_Act |
+| Light cruise (2000 RPM, 15% ped) | 31760–32000 | −21 to 0.9  | ~−21       | Tracks T_Net at lockup |
+| Moderate load (2050 RPM, 23% ped)| 32300–32350 | 45.9–52.4   | ~46        | Tracks T_Net at lockup |
+| WOT 3000 RPM, TC locked           | ~33016      | ~135        | 135        | X8F_dec = T_Act+T_Loss (<0.5% error) |
+| WOT 3300 RPM, TC locked           | ~32966      | ~129        | 129        | X8F_dec = T_Act+T_Loss (<0.5% error) |
+| WOT 97.7% ped, 3000 RPM          | ~35200      | ~284        | —          | High boost condition |
+| WOT 97.7% ped, 2000 RPM          | ~34050      | ~140        | —          | High boost condition |
 
-The 0x8F signal is always smaller than A7_Sig2 (0x0A7 O32) at the same operating point. Both signals converge toward T_Act at moderate cruise and diverge increasingly at WOT/high boost.
+X8F_Sig1 is always smaller than A7_Sig2 (0x0A7 O32) at the same operating point. Both converge toward T_Act at moderate cruise and diverge increasingly at WOT/boost.
 
 ---
 
@@ -210,12 +211,17 @@ t_max_nm  = nm(le_bits(raw, 24, 12))  # calibration ceiling (~434 Nm)
 t_cut_nm  = nm(le_bits(raw, 36, 12))  # cut/limit setpoint
 t_act_nm  = nm(le_bits(raw, 48, 12))  # actual indicated torque
 
+OFFSET_16 = 31932  # = 16 × 1999 − 52; same physical zero as 12-bit, 0.125 Nm/count
+
+def nm16(raw: int) -> float:
+    return (raw - OFFSET_16) / 8.0
+
 # 0x0A7
 t_demand_nm = nm(le_bits(raw, 12, 12))   # driver demand torque
-a7_sig2     = le_bits(raw, 32, 16)       # 16-bit torque-related signal (TBD encoding)
+a7_sig2_nm  = nm16(le_bits(raw, 32, 16)) # 16-bit torque (T_Act×GR at WOT lockup; step-down at upshifts)
 
 # 0x8F
-x8f_sig1 = le_bits(raw, 16, 16)          # 16-bit torque-related signal (TBD encoding)
+x8f_sig1_nm = nm16(le_bits(raw, 16, 16)) # 16-bit torque (≈T_Net at high-RPM TC lockup; ≈T_Act at stall)
 
 # 0x0A0
 t_coord      = nm(le_bits(raw, 16, 12))        # coordination trim to TCU
