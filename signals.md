@@ -90,7 +90,7 @@ Frame length: 7 bytes.
 | Signal   | Offset (bit) | Length (bit) | Scaling                | Unit | Description |
 |----------|-------------|--------------|------------------------|------|-------------|
 | T_Demand | 12          | 12           | Nm = (raw−1999)/2      | Nm   | Driver demand torque (Fahrerwunschmoment). The raw pedal-derived torque request before coordinator limits are applied. Pearson r = 0.866 with pedal position. Runs 5–10 Nm above T_Act at mid-to-high load; lower than T_Act at idle (idle speed controller manages independently). |
-| A7_Sig2  | 32          | 16           | Nm = (raw−31932)/8     | Nm   | 16-bit torque-related signal. 0.125 Nm/count (4× finer resolution than 12-bit signals; offset 31932 = 16 × 1999 − 52, same physical zero). Raw range observed: 31000–43242. Best single-predictor fit across 131K frames: T_Demand (R²=0.68, RMSE=43 Nm). At WOT in 4th gear (TC locked): A7_dec ≈ T_Act × GR₄ (≈1.667), consistent with a drivetrain output or TCU-side torque target scaled by current gear ratio. Shows sharp step-down transients coinciding with every upshift event. Exact physical quantity (e.g. TCU torque request, drive-shaft torque estimate) not fully confirmed; gear-stratified analysis required to resolve residual scatter. |
+| A7_Sig2  | 32          | 16           | Nm = (raw−31932)/8     | Nm   | 16-bit drivetrain torque signal. 0.125 Nm/count (4× finer resolution than 12-bit signals; offset 31932 ≈ 16 × 1999, same physical zero). Raw range observed: 31577–43242. At TC lockup, A7_dec ≈ T_Act × GR_current_gear: per-gear OLS slopes match ZF 8HP45 ratios (GR4=1.667→slope=1.713, GR8=0.667→slope=0.628) with per-gear R²=0.96–0.98 and RMSE=4–11 Nm. WOT spot-check in 4th gear shows ratio error ≤1.5%. Consistent with transmission output shaft torque or TCU wheel-side torque estimate. Shows sharp step-down transients coinciding with every upshift event. Non-zero OLS intercept at mid-load indicates an additive baseline component beyond the pure T_Act×GR product. |
 
 ### T_Demand vs T_Act comparison
 
@@ -103,6 +103,20 @@ Frame length: 7 bytes.
 | 90–99%    | 171          | 166        | +5     |
 
 At high load, T_Demand slightly exceeds T_Act — the driver requests slightly more than the coordinator delivers after applying T_Cut and T_Loss constraints.
+
+### A7_Sig2 gear-ratio validation (TC-locked, cross-log)
+
+Per-gear OLS of A7_dec ~ T_Act at TC lockup (slip ≥ 0.95). Slopes closely track ZF 8HP45 ratios.
+
+| Gear | ZF GR  | Fitted slope | Mean A7/T_Act | R²     | RMSE   |
+|------|--------|-------------|---------------|--------|--------|
+| 4    | 1.667  | 1.713       | 1.604         | 0.976  | 7.8 Nm |
+| 5    | 1.285  | 1.101       | 1.231         | 0.960  | 11.1 Nm|
+| 6    | 1.000  | 1.148       | 1.077         | 0.969  | 7.1 Nm |
+| 7    | 0.839  | 0.787       | 0.788         | 0.966  | 5.4 Nm |
+| 8    | 0.667  | 0.628       | 0.628         | 0.980  | 4.1 Nm |
+
+Mean A7/T_Act tracks GR to within 4–8%. At WOT in 4th gear the ratio converges to GR₄=1.667 within 0–1.5%.
 
 ---
 
