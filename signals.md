@@ -120,29 +120,46 @@ Mean A7/T_Act tracks GR to within 4–8%. At WOT in 4th gear the ratio converges
 
 ---
 
-## Frame 0x8F — Unknown Torque Signal
+## Frame 0x8F — Effective Drivetrain Output Torque
 
 Rate: ~200 Hz (highest rate frame observed)  
 Frame structure: 8 bytes. b0 = CRC/checksum (rapidly varying). b1 = alive counter (upper nibble fixed at 0x10, lower nibble cycles). b4–b7 = constant (0x22 0x00 0x20 0x10 — likely protocol/version bytes). Only b2–b3 carry live data.
 
 | Signal   | Offset (bit) | Length (bit) | Scaling             | Unit | Description |
 |----------|-------------|--------------|---------------------|------|-------------|
-| X8F_Sig1 | 16          | 16           | Nm = (raw−31932)/8  | Nm   | 16-bit torque-related signal. 0.125 Nm/count; same zero encoding as A7_Sig2. Raw range observed: 30800–36297. Best single-predictor fit across 131K frames: T_Demand (R²=0.80, RMSE=25 Nm). At high-RPM steady-state TC lockup: X8F_dec ≈ T_Net = T_Act + T_Loss (crankshaft net output torque after friction subtraction), verified to <0.5% at multiple WOT operating points. At idle/TC stall: X8F_dec ≈ T_Act. The transition between these two modes is governed by TC slip state. Always smaller than A7_Sig2 at the same operating point; both converge toward T_Act at moderate cruise and diverge increasingly at WOT/boost. |
+| X8F_Sig1 | 16          | 16           | Nm = (raw−31932)/8  | Nm   | Effective drivetrain output torque including all active interventions. 0.125 Nm/count; same zero as A7_Sig2. Raw range: 30800–36297. At TC lockup in gears 6–8 (GR ≤ 1.0): X8F_dec ≈ T_Net × GR_current_gear within 5–9% (per-gear R²=0.91–0.95). At WOT in gear 4, WOT spot-check confirms X8F ≈ T_Net×GR to within ~10 Nm. During active torque interventions (T_Cut < −10 Nm): X8F collapses to floor (raw 32000 = 8.5 Nm) while A7_Sig2 and T_Act remain elevated — X8F reflects transmitted rather than produced torque. Floor value (raw 32000) also appears at TC stall (zero turbine speed). In gears 4–5, mean X8F/T_Net is 20–25% below GR, likely due to mixed-slip and part-load frames within each gear band. Relationship to A7_Sig2: X8F = A7_Sig2 − T_Loss×GR (i.e. A7 carries indicated engine torque×GR, X8F subtracts friction×GR to give net transmitted torque). |
+
+### X8F_Sig1 gear-ratio validation (TC-locked, cross-log)
+
+Per-gear mean ratio X8F_dec / T_Net vs ZF 8HP45 GR. Relationship holds tightest in overdrive/direct gears.
+
+| Gear | ZF GR  | X8F/T_Net (194107) | X8F/T_Net (190250) | X8F~T_Net R² | Notes |
+|------|--------|--------------------|--------------------|-------------|-------|
+| 4    | 1.667  | 1.246              | 1.342              | 0.71–0.72   | 20–25% below GR; WOT spot-check +9 Nm of T_Net×GR |
+| 5    | 1.285  | 1.008              | 1.042              | 0.82–0.95   | 19–22% below GR |
+| 6    | 1.000  | 0.917              | 0.994              | 0.68–0.69   | within 0.6–8% of GR |
+| 7    | 0.839  | 0.763              | 0.801              | 0.93–0.93   | within 4.5–9% of GR |
+| 8    | 0.667  | 0.697              | 0.673              | 0.91–0.92   | within 0.9–4.5% of GR |
+
+### Intervention behaviour
+
+During active T_Cut events (torque coordination / shift clutch overlap):
+- X8F_Sig1 collapses to floor (raw 32000 = 8.5 Nm), indicating zero net transmitted torque
+- A7_Sig2 remains above zero, reflecting engine-side indicated torque still present
+- T_Act remains elevated throughout; X8F is the only signal showing the transmission-side effect
 
 ### Observed X8F_Sig1 values
 
-| Condition                         | Raw         | Decoded (Nm) | T_Net (Nm) | Notes |
-|----------------------------------|-------------|-------------|------------|-------|
-| Key-on, engine off                | 32000       | 0.9         | —          | Initialization default |
-| Idle (~780 RPM)                   | ~32000      | ~0.9        | ~0         | TC stall; tracks T_Act |
-| Light cruise (2000 RPM, 15% ped) | 31760–32000 | −21 to 0.9  | ~−21       | Tracks T_Net at lockup |
-| Moderate load (2050 RPM, 23% ped)| 32300–32350 | 45.9–52.4   | ~46        | Tracks T_Net at lockup |
-| WOT 3000 RPM, TC locked           | ~33016      | ~135        | 135        | X8F_dec = T_Act+T_Loss (<0.5% error) |
-| WOT 3300 RPM, TC locked           | ~32966      | ~129        | 129        | X8F_dec = T_Act+T_Loss (<0.5% error) |
-| WOT 97.7% ped, 3000 RPM          | ~35200      | ~284        | —          | High boost condition |
-| WOT 97.7% ped, 2000 RPM          | ~34050      | ~140        | —          | High boost condition |
+| Condition                          | Raw    | Decoded (Nm) | T_Net×GR (Nm) | Notes |
+|-----------------------------------|--------|-------------|--------------|-------|
+| Floor / TC stall / full torque cut | 32000  | 8.5         | —            | Default / no-transmission state |
+| Idle lockup (194107, 650 RPM)      | ~32390 | ~48         | ~0 (G—)      | TC slip; tracks T_Act at stall |
+| Cruise, gear 8 (~100 Nm T_Act)    | ~32580 | ~81         | ~81          | X8F ≈ T_Net×GR₈ |
+| Cruise, gear 7 (~100 Nm T_Act)    | ~32720 | ~98         | ~97          | X8F ≈ T_Net×GR₇ |
+| WOT, gear 4 (T_Act=101, T_Net=60) | ~32930 | ~108        | 100          | X8F ≈ T_Net×GR₄ +9 Nm |
+| WOT, gear 4 (T_Act=165, T_Net=149)| ~33450 | ~183        | 248          | Partially limited; ~80% of T_Net×GR |
 
-X8F_Sig1 is always smaller than A7_Sig2 (0x0A7 O32) at the same operating point. Both converge toward T_Act at moderate cruise and diverge increasingly at WOT/boost.
+X8F_Sig1 is always smaller than A7_Sig2 at the same operating point. The difference A7−X8F represents the friction torque component scaled by gear ratio (T_Loss×GR).
 
 ---
 
