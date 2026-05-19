@@ -157,8 +157,8 @@ def plot(sr_all, tc_all, valid, centres, means, stds,
 if __name__ == "__main__":
     csv_path = sys.argv[1] if len(sys.argv) > 1 else "torque_converter_190250.csv"
     stem     = Path(csv_path).stem
-    out_png  = f"k_norm_characteristic_{stem}.png"
-    out_csv  = f"k_norm_characteristic_{stem}.csv"
+    out_png  = sys.argv[2] if len(sys.argv) > 2 else f"k_norm_characteristic_{stem}.png"
+    out_csv  = sys.argv[3] if len(sys.argv) > 3 else f"k_norm_characteristic_{stem}.csv"
 
     np.random.seed(0)
 
