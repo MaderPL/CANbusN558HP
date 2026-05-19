@@ -148,6 +148,44 @@ Encoding is identical to A7 Lambda: Q1.15 fixed-point, stoichiometric = 0x8000 =
 
 ---
 
+## Frame 0x0A0 — Transmission Frame A (DME → TCU torque broadcast)
+
+Rate: ~100 Hz
+
+| Signal        | Offset (bit) | Length (bit) | Description |
+|---------------|-------------|--------------|-------------|
+| Counter       | 0           | 16           | Rolling message counter (16-bit LE, monotonically increasing). Not a sensor signal. |
+| T_Net         | 16          | 12           | Net / trim torque in Nm encoding (offset 1999, ×0.5 Nm/LSB). Small range ≈ ±15 Nm centered near 0; likely shaft net torque or coordination trim broadcast to TCU. |
+| ShiftStatus   | 24          | 8            | Byte[3]. Two observed values: **0x87** (normal coordination) / **0x88** (shift torque-cut active). The single-bit transition (low nibble 7→8) flags an active transmission torque intervention. Occurs at light pedal (<5%), mid RPM (~1800), and coincides with T_Cut ≈ −30 Nm on 0x0A6. |
+| CalibConst    | 32          | 16           | Near-constant value (~64400 raw, Q0.16 ≈ 0.982). Low entropy at high RPM (single unique value). Likely a calibration reference or fixed-point constant, not a live sensor. |
+| SubCounter    | 40          | 8            | Byte[5] cycles 0xFA→0xFB→0xFC (3 values). Sub-counter or frame type indicator. |
+| MsgCounter    | 48          | 16           | Second counter field (confirmed constant delta = 0 between consecutive frames in the initial segment, behaves as a timestamp). |
+
+---
+
+## Frame 0x0B0 — Transmission Frame B (TCU → DME lambda permission)
+
+Rate: ~100 Hz
+
+| Signal        | Offset (bit) | Length (bit) | Scaling                 | Description |
+|---------------|-------------|--------------|-------------------------|-------------|
+| AliveCounter  | 0           | 16           | —                       | Rolling alive counter (bytes 0–1). Confirms frame is live. |
+| Lambda_Max    | 32          | 16           | λ = raw / 32768 (Q1.15) | **TCU lean-burn permission ceiling.** Maximum lambda the TCU allows the DME to target. Always slightly above stoich (1.0017–1.0185). At idle/light load the TCU permits lean-burn (≤1.010); as load or shift probability increases it tightens toward stoich (≤1.002), ensuring full torque is available for clutch engagement. Negative Pearson r with both RPM (−0.62) and pedal (−0.51). |
+| Mode_Status   | 32          | 8            | —                       | Byte[4]. 16 unique values combining an upper nibble (operating mode) and lower nibble alive counter. Dominant values: **0x5F** (idle, RPM≈692, ped≈0%) and **0x3F** (normal driving, RPM≈2310, ped≈40%). Value 0x38/0x39 appears at high load (ped>60%). |
+
+### Lambda_Max (0x0B0) vs lambda_soll (0x8F)
+
+| Pedal bin | Lambda_Max (TCU ceiling) | λ_soll (DME target) | Headroom |
+|-----------|------------------------|---------------------|----------|
+| 0–9%      | 1.010                  | 0.978               | +0.032   |
+| 50–59%    | 1.002                  | 0.985               | +0.017   |
+| 80–89%    | 1.002                  | 1.001               | +0.001   |
+| 90–99%    | 1.002                  | 1.009               | −0.007   |
+
+At very high pedal (90%+) λ_soll briefly exceeds Lambda_Max by 0.007 — open-loop transient enrichment overshoot. The TCU ceiling is the dominant constraint in the lean-burn zone; the DME operates below it at all other times.
+
+---
+
 ## Frame 0x0D9 — Pedal Position
 
 Rate: ~50 Hz
