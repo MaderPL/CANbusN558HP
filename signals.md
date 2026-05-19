@@ -1,8 +1,17 @@
-# BMW N558HP CAN Signal Documentation
+# BMW CAN Signal Documentation
 
-Vehicle: BMW F30 3-series, VIN WBA3A9C5XFKW74642  
+Primary vehicle: BMW F30 3-series, VIN WBA3A9C5XFKW74642  
 Engine: N55/N558HP (Bosch ME17.2 DME)  
 Encoding: Little-endian (Intel byte order), ARM Cortex-M7 GCC bitfield-compatible
+
+Signal presence across captured vehicles:
+
+| Frame | F30 N55 | F30 B58 | F31 320d | F15 X5 N57Z | F20 | G11 |
+|-------|---------|---------|----------|-------------|-----|-----|
+| 0x08F (reinf) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 0x0A5 (engine RPM) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 0x1AF (turbine/tailshaft) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| 0x1B0 (turbine/tailshaft) | — | — | — | — | — | ✓ |
 
 Signal extraction formula:
 ```python
@@ -132,6 +141,84 @@ Rate: ~50 Hz
 | Signal    | Offset (bit) | Length (bit) | Scaling        | Unit | Description |
 |-----------|-------------|--------------|----------------|------|-------------|
 | Pedal_Raw | 16          | 12           | % = raw/max×100 | —    | Accelerator pedal position. 0 = fully released. Max observed raw ≈ 4095. |
+
+---
+
+---
+
+## Torque Converter Frames
+
+These frames are present on all captured vehicles. Encoding is consistent across
+F30, F31, F15, F20, and G11 for 0x08F and 0x0A5. The turbine/tailshaft frame
+differs by vehicle generation: 0x1AF on most models, 0x1B0 on the G11 (7-series).
+
+### Frame 0x08F — Transmission Reinforcement Signal
+
+Rate: ~100 Hz
+
+| Signal      | Offset (bit) | Length (bit) | Scaling | Unit | Description |
+|-------------|-------------|--------------|---------|------|-------------|
+| reinf_signal | 48         | 8            | raw     | —    | TCC solenoid pressure proxy. High at stall (~200+), low at lockup (~25). Integer steps. |
+
+```python
+reinf = data[6]   # byte 6, unsigned uint8
+```
+
+Typical values by operating condition:
+
+| Condition         | reinf range | Notes |
+|-------------------|-------------|-------|
+| Stall / low SR    | 180–255     | Maximum converter multiplication |
+| Mid SR (0.40–0.75)| 80–150      | Partial slip |
+| Near lockup       | 25–60       | Approaching coupled state |
+| Full lockup (SR ≥ 0.97) | 20–40 | Baseline region for normalisation |
+
+### Frame 0x1AF — Turbine & Tailshaft Speed (most vehicles)
+
+Present on: F30, F31, F15 X5, F20, and all other non-G11 vehicles tested.  
+Rate: ~50 Hz
+
+| Signal        | Offset (bit) | Length (bit) | Scaling         | Unit | Description |
+|---------------|-------------|--------------|-----------------|------|-------------|
+| turbine_rpm   | 24          | 16           | rpm = raw − 2000 | rpm  | Torque converter turbine speed |
+| tailshaft_rpm | 40          | 16           | rpm = raw − 2000 | rpm  | Transmission output / tailshaft speed |
+
+```python
+turbine_rpm   = (data[3] | (data[4] << 8)) - 2000
+tailshaft_rpm = (data[5] | (data[6] << 8)) - 2000
+```
+
+Both signals share the 2000 RPM offset: raw 2000 (0x07D0) = 0 RPM. Negative
+decoded values indicate the signal is invalid or the vehicle is stationary.
+
+### Frame 0x1B0 — Turbine & Tailshaft Speed (G11 7-series)
+
+Present on: G11 (confirmed). Replaces 0x1AF on this platform.  
+Rate: ~50 Hz
+
+| Signal        | Offset (bit) | Length (bit) | Scaling         | Unit | Description |
+|---------------|-------------|--------------|-----------------|------|-------------|
+| tailshaft_rpm | 8           | 16           | rpm = raw − 2000 | rpm  | Transmission output / tailshaft speed |
+| turbine_rpm   | 24          | 16           | rpm = raw − 2000 | rpm  | Torque converter turbine speed |
+
+```python
+tailshaft_rpm = (data[1] | (data[2] << 8)) - 2000   # bytes 1-2 (offset 8)
+turbine_rpm   = (data[3] | (data[4] << 8)) - 2000   # bytes 3-4 (offset 24)
+```
+
+Signal order is reversed compared to 0x1AF: tailshaft precedes turbine.
+Same 2000 RPM zero-offset encoding as 0x1AF.
+
+### Derived torque converter quantities
+
+```python
+SR  = turbine_rpm / engine_rpm        # speed ratio (0 = stall, 1 = lockup)
+GR  = turbine_rpm / tailshaft_rpm     # gear ratio (ZF 8HP: 4.714 … 0.667)
+reinf_norm = reinf_signal / GR        # reinf normalised for gear
+K_norm = reinf_norm / baseline        # 1.0 at full lockup
+```
+
+Where `baseline = median(reinf/GR)` over all samples with SR ∈ [0.97, 1.03].
 
 ---
 
