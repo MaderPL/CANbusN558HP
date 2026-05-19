@@ -125,6 +125,29 @@ At high load, T_Demand slightly exceeds T_Act — the driver requests slightly m
 
 ---
 
+## Frame 0x8F — Lambda Setpoint
+
+Rate: ~200 Hz (highest rate frame observed)
+
+| Signal     | Offset (bit) | Length (bit) | Scaling                 | Unit | Description |
+|------------|-------------|--------------|-------------------------|------|-------------|
+| Lambda_Soll | 16         | 16           | λ = raw / 32768 (Q1.15) | —    | Commanded lambda setpoint (λ_soll). The target mixture ratio that the closed-loop fuel controller is chasing. Near-identical to A7 Lambda at idle (diff < 2 counts); diverges slightly at high load where open-loop enrichment creates a small offset between command and measurement. |
+
+### Lambda_Soll vs Lambda (A7) comparison
+
+| Condition     | λ_soll (0x8F) | λ_meas (A7) | Δ      |
+|--------------|--------------|-------------|--------|
+| Idle (0% ped) | 0.978        | 0.978       | ≈ 0    |
+| 50% pedal    | 0.985        | 0.987       | −0.002 |
+| 80% pedal    | 1.001        | 1.006       | −0.005 |
+| WOT 4000 RPM | 1.002        | 1.008       | −0.006 |
+
+Pearson r(λ_soll, λ_meas) = 0.955. The small positive offset of λ_meas over λ_soll at high load reflects the open-loop fuelling region where the ECU enriches beyond the closed-loop target during transients.
+
+Encoding is identical to A7 Lambda: Q1.15 fixed-point, stoichiometric = 0x8000 = 32768 → λ = 1.000. Range observed: 0.962–1.032.
+
+---
+
 ## Frame 0x0D9 — Pedal Position
 
 Rate: ~50 Hz
@@ -161,6 +184,9 @@ t_act_nm  = nm(le_bits(raw, 48, 12))  # actual indicated torque
 t_demand_nm = nm(le_bits(raw, 12, 12))      # driver demand torque
 lam         = le_bits(raw, 32, 16) / 32768  # lambda (1.0 = stoich)
 afr         = lam * 14.7
+
+# 0x8F
+lam_soll = le_bits(raw, 16, 16) / 32768   # lambda setpoint (1.0 = stoich)
 
 # 0x0D9
 pedal_raw = le_bits(raw, 16, 12)
