@@ -38,3 +38,15 @@ BO_ 143 X8F_TorqueSignal: 8 Vector__XXX
 BO_ 217 D9_PedalPosition: 8 Vector__XXX
  SG_ Pedal_Raw : 16|12@1+ (1,0) [0|4095] "" Vector__XXX
 
+BO_ 596 X254_WheelSpeeds: 8 Vector__XXX
+ SG_ WheelSpeed_FL : 0|15@1+  (1,0) [0|32767] "grad/s" Vector__XXX
+ SG_ Valid_FL      : 15|1@1+  (1,0) [0|1]     ""        Vector__XXX
+ SG_ WheelSpeed_FR : 16|15@1+ (1,0) [0|32767] "grad/s" Vector__XXX
+ SG_ Valid_FR      : 31|1@1+  (1,0) [0|1]     ""        Vector__XXX
+ SG_ WheelSpeed_RL : 32|15@1+ (1,0) [0|32767] "grad/s" Vector__XXX
+ SG_ Valid_RL      : 47|1@1+  (1,0) [0|1]     ""        Vector__XXX
+ SG_ WheelSpeed_RR : 48|15@1+ (1,0) [0|32767] "grad/s" Vector__XXX
+ SG_ Valid_RR      : 63|1@1+  (1,0) [0|1]     ""        Vector__XXX
+
+CM_ BO_ 596 "Wheel speed broadcast. 4 x uint15 wheel speeds in gradians/second (400 gradians = 1 wheel revolution). Bit 15 of each 16-bit field is a 'valid' flag (1 = valid). Invalid pattern: lower 15 bits all set (0x7FFF). wheel_rpm = raw * 60 / 400 = raw * 0.15. Final-drive ratio = tailshaft_rpm / wheel_rpm.";
+
