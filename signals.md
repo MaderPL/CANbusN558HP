@@ -86,30 +86,32 @@ Net shaft torque = T_Act + T_Loss (T_Loss is already negative).
 
 Rate: ~50 Hz
 
-| Signal   | Offset (bit) | Length (bit) | Scaling                    | Unit | Description |
-|----------|-------------|--------------|----------------------------|------|-------------|
-| T_Demand | 12          | 12           | Nm = (raw−1999)/2          | Nm   | Driver demand torque (Fahrerwunschmoment). The raw pedal-derived torque request before coordinator limits are applied. Pearson r = 0.866 with pedal position. Runs 5–10 Nm above T_Act at mid-to-high load; lower than T_Act at idle (idle speed controller manages independently). |
-| Lambda   | 32          | 16           | λ = raw / 32768 (Q1.15)    | —    | Wideband lambda. Stoichiometric = 0x8000 = 32768 → λ = 1.000. AFR = λ × 14.7. |
+| Signal     | Offset (bit) | Length (bit) | Scaling              | Unit | Description |
+|------------|-------------|--------------|----------------------|------|-------------|
+| T_Demand   | 12          | 12           | Nm = (raw−1999)/2    | Nm   | Driver demand torque (Fahrerwunschmoment). The raw pedal-derived torque request before coordinator limits are applied. Pearson r = 0.866 with pedal position. Runs 5–10 Nm above T_Act at mid-to-high load; lower than T_Act at idle (idle speed controller manages independently). |
+| Phi_Demand | 32          | 16           | φ = raw / 32768      | —    | **Fuel-air equivalence ratio demand** (φ = 1/λ). The unconstrained fuel enrichment target from the load map. φ = 1.0 → stoichiometric; φ > 1.0 → rich; φ < 1.0 → lean. Actual lambda = 32768 / raw. This signal responds immediately to throttle changes and can exceed the commanded value (0x8F Phi_Soll) at low RPM where injector duty cycle limits delivery. |
 
-### Lambda encoding
+### Phi encoding (both 0x0A7 and 0x8F)
 
 ```
-lambda = raw / 32768          # Q1.15 fixed-point
-AFR    = lambda × 14.7        # gasoline
+phi   = raw / 32768        # Q1.15, fuel-air equivalence ratio (= 1/lambda)
+lambda = 32768 / raw       # actual lambda: <1.0 = rich, >1.0 = lean
+AFR   = lambda × 14.7      # gasoline stoich AFR
 ```
 
-The high byte (bits 40–47 of the frame) is the integer part of λ×128, restricted to values 123–137 (0x7B–0x89). This brackets 0x80 = stoichiometric, confirming Q1.15.
+Stoichiometric: raw = 32768 → φ = 1.0 → λ = 1.0. Rich mixture: raw > 32768. Lean mixture: raw < 32768.
 
-### Observed lambda values
+### Observed Phi_Demand (0x0A7) values
 
-| Condition        | λ           | AFR         |
-|-----------------|-------------|-------------|
-| Idle             | 0.987       | 14.51       |
-| Light cruise     | 1.007–1.021 | 14.80–15.01 |
-| WOT              | 0.973–0.980 | 14.30–14.41 |
-| Max observed     | 1.077       | 15.83       |
+| Condition                    | raw   | φ      | λ     | AFR   |
+|-----------------------------|-------|--------|-------|-------|
+| Light cruise (15% pedal)    | ~32000 | 0.977 | 1.024 | 15.06 |
+| Moderate load (40% pedal)   | ~33000 | 1.007 | 0.993 | 14.60 |
+| WOT 97.7% ped, 3000 RPM    | ~38400 | 1.172 | 0.853 | 12.54 |
+| WOT 97.7% ped, 2000 RPM    | ~43200 | 1.318 | 0.759 | 11.16 |
+| WOT 97.7% ped, 7000 RPM    | ~36600 | 1.117 | 0.895 | 13.16 |
 
-Pearson(Pedal, λ) = +0.634: the N558HP map runs lean at medium throttle (efficiency lean-burn zone) and enriches only modestly at WOT below ~4500 RPM.
+At low RPM WOT (2000 rpm), the map demands very rich mixture (λ ≈ 0.76) during boost build-up. As RPM rises, demand moderates (λ ≈ 0.85–0.90 at 3000–6000 RPM). Light cruise uses lean-burn (λ > 1.0).
 
 ### T_Demand vs T_Act comparison
 
@@ -125,26 +127,27 @@ At high load, T_Demand slightly exceeds T_Act — the driver requests slightly m
 
 ---
 
-## Frame 0x8F — Lambda Setpoint
+## Frame 0x8F — Fuel-Air Ratio Setpoint
 
-Rate: ~200 Hz (highest rate frame observed)
+Rate: ~200 Hz (highest rate frame observed)  
+Frame structure: 8 bytes. b0 = CRC/checksum (rapidly varying). b1 = alive counter (0x1X). b4–b7 = constant protocol bytes (0x22 0x00 0x20 0x10).
 
-| Signal     | Offset (bit) | Length (bit) | Scaling                 | Unit | Description |
-|------------|-------------|--------------|-------------------------|------|-------------|
-| Lambda_Soll | 16         | 16           | λ = raw / 32768 (Q1.15) | —    | Commanded lambda setpoint (λ_soll). The target mixture ratio that the closed-loop fuel controller is chasing. Near-identical to A7 Lambda at idle (diff < 2 counts); diverges slightly at high load where open-loop enrichment creates a small offset between command and measurement. |
+| Signal    | Offset (bit) | Length (bit) | Scaling          | Unit | Description |
+|-----------|-------------|--------------|------------------|------|-------------|
+| Phi_Soll  | 16          | 16           | φ = raw / 32768  | —    | **Commanded fuel-air equivalence ratio** (φ_soll = 1/λ). The actual fuel enrichment command sent to the injectors, after any delivery constraints are applied. φ = 1.0 = stoichiometric (raw = 32768). Rich (WOT): raw > 32768 (φ > 1.0 → λ < 1.0). Lean cruise: raw < 32768 (φ < 1.0 → λ > 1.0). At high pedal + low RPM, limited below Phi_Demand (0x0A7) by injector capacity. |
 
-### Lambda_Soll vs Lambda (A7) comparison
+### Phi_Soll (0x8F) vs Phi_Demand (0x0A7) — fuel delivery constraint
 
-| Condition     | λ_soll (0x8F) | λ_meas (A7) | Δ      |
-|--------------|--------------|-------------|--------|
-| Idle (0% ped) | 0.978        | 0.978       | ≈ 0    |
-| 50% pedal    | 0.985        | 0.987       | −0.002 |
-| 80% pedal    | 1.001        | 1.006       | −0.005 |
-| WOT 4000 RPM | 1.002        | 1.008       | −0.006 |
+| Condition                    | Phi_Soll (8F) λ=32768/r | Phi_Demand (A7) λ=32768/r | Injector-limited? |
+|-----------------------------|------------------------|--------------------------|------------------|
+| Light cruise (15% pedal)    | 0.977 → λ = 1.024      | 0.977 → λ = 1.024         | No (equal)       |
+| WOT 97.7% ped, 3000 RPM    | 1.074 → λ = 0.931      | 1.172 → λ = 0.853         | Yes              |
+| WOT 97.7% ped, 2000 RPM    | 1.039 → λ = 0.963      | 1.319 → λ = 0.758         | Yes (heavily)    |
+| WOT 97.7% ped, 4500 RPM    | 1.049 → λ = 0.953      | 1.063 → λ = 0.941         | Marginal         |
 
-Pearson r(λ_soll, λ_meas) = 0.955. The small positive offset of λ_meas over λ_soll at high load reflects the open-loop fuelling region where the ECU enriches beyond the closed-loop target during transients.
+At low RPM the injectors reach duty-cycle limits — the map demands λ ≈ 0.76 but the commanded injection quantity only achieves λ ≈ 0.96. As RPM rises, the injectors have more time per cycle to open and the two signals converge. This gap represents the fuel delivery deficit under the N558HP tune at low-RPM WOT.
 
-Encoding is identical to A7 Lambda: Q1.15 fixed-point, stoichiometric = 0x8000 = 32768 → λ = 1.000. Range observed: 0.962–1.032.
+Observed range: raw 30800–36297 → φ 0.940–1.108 → λ 0.903–1.064.
 
 ---
 
@@ -228,12 +231,14 @@ t_cut_nm  = nm(le_bits(raw, 36, 12))  # cut/limit setpoint
 t_act_nm  = nm(le_bits(raw, 48, 12))  # actual indicated torque
 
 # 0x0A7
-t_demand_nm = nm(le_bits(raw, 12, 12))      # driver demand torque
-lam         = le_bits(raw, 32, 16) / 32768  # lambda (1.0 = stoich)
-afr         = lam * 14.7
+t_demand_nm = nm(le_bits(raw, 12, 12))       # driver demand torque
+phi_demand  = le_bits(raw, 32, 16) / 32768   # fuel-air equivalence ratio demand (phi = 1/lambda)
+lam_demand  = 32768 / le_bits(raw, 32, 16)   # lambda = 1/phi (<1.0 = rich at WOT)
+afr_demand  = lam_demand * 14.7
 
 # 0x8F
-lam_soll = le_bits(raw, 16, 16) / 32768   # lambda setpoint (1.0 = stoich)
+phi_soll   = le_bits(raw, 16, 16) / 32768    # commanded phi (1/lambda) sent to injectors
+lam_soll   = 32768 / le_bits(raw, 16, 16)    # commanded lambda (<1.0 = rich at WOT)
 
 # 0x0A0
 t_coord      = nm(le_bits(raw, 16, 12))        # coordination trim to TCU
