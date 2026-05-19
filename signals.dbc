@@ -17,9 +17,23 @@ BO_ 166 A6_TorqueCoordination: 8 Vector__XXX
  SG_ T_Cut  : 36|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
  SG_ T_Act  : 48|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
 
-BO_ 167 A7_AirFuelManagement: 8 Vector__XXX
+BO_ 167 A7_AirFuelManagement: 7 Vector__XXX
  SG_ T_Demand : 12|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
- SG_ Lambda   : 32|16@1+ (3.0518e-5,0) [0|2.0]  "" Vector__XXX
+ SG_ A7_Sig2  : 32|16@1+ (1,0)        [0|65535]        ""  Vector__XXX
+
+BO_ 160 A0_TransTorqueBroadcast: 8 Vector__XXX
+ SG_ Counter      :  0|16@1+ (1,0)        [0|65535]       ""    Vector__XXX
+ SG_ T_Coord      : 16|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm"  Vector__XXX
+ SG_ TurbineSpeed : 48|16@1+ (1,-2000)    [0|14000]        "rpm" Vector__XXX
+
+BO_ 176 B0_TransTorqueMgmt: 8 Vector__XXX
+ SG_ AliveCounter  :  0|16@1+ (1,0)        [0|65535]       ""   Vector__XXX
+ SG_ B0_T1         : 12|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
+ SG_ B0_ShiftCeil  : 24|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
+ SG_ B0_T3         : 36|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm" Vector__XXX
+
+BO_ 143 X8F_TorqueSignal: 8 Vector__XXX
+ SG_ X8F_Sig1 : 16|16@1+ (1,0) [0|65535] "" Vector__XXX
 
 BO_ 217 D9_PedalPosition: 8 Vector__XXX
  SG_ Pedal_Raw : 16|12@1+ (1,0) [0|4095] "" Vector__XXX
