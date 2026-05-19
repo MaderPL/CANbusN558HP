@@ -197,6 +197,58 @@ Rate: ~50 Hz
 
 ---
 
+## Frame 0x254 — Wheel Speeds (DSC broadcast)
+
+Rate: ~50 Hz
+Frame length: 8 bytes (4 × 16-bit fields, one per wheel, little-endian).
+Encoding: lower 15 bits = wheel angular velocity in **gradians/second**
+(400 gradians = 1 wheel revolution); bit 15 = validity flag (1 = valid).
+Invalid pattern: lower 15 bits all set (0x7FFF), full word 0xFFFF / 0x7FFF.
+
+| Signal         | Offset (bit) | Length (bit) | Scaling                | Unit   | Description |
+|----------------|-------------|--------------|------------------------|--------|-------------|
+| WheelSpeed_FL  | 0           | 15           | rpm = raw × 60 / 400   | grad/s | Front-left wheel  |
+| Valid_FL       | 15          | 1            | —                      | —      | 1 = signal valid  |
+| WheelSpeed_FR  | 16          | 15           | rpm = raw × 60 / 400   | grad/s | Front-right wheel |
+| Valid_FR       | 31          | 1            | —                      | —      | 1 = signal valid  |
+| WheelSpeed_RL  | 32          | 15           | rpm = raw × 60 / 400   | grad/s | Rear-left wheel   |
+| Valid_RL       | 47          | 1            | —                      | —      | 1 = signal valid  |
+| WheelSpeed_RR  | 48          | 15           | rpm = raw × 60 / 400   | grad/s | Rear-right wheel  |
+| Valid_RR       | 63          | 1            | —                      | —      | 1 = signal valid  |
+
+```python
+def wheel_speeds(data: bytes):
+    out = []
+    for i in (0, 2, 4, 6):
+        w = data[i] | (data[i+1] << 8)
+        valid = bool(w & 0x8000)
+        raw   = w & 0x7FFF
+        rpm   = raw * 60.0 / 400.0    # gradians/s -> rpm
+        out.append((valid, rpm))
+    return out  # [(valid, rpm) for FL, FR, RL, RR]
+```
+
+Final-drive ratio recovery (paired with 0x1AF tailshaft):
+
+```
+FD = tailshaft_rpm / wheel_rpm
+```
+
+Measured FD values, robust median over gears 5-8:
+
+| Vehicle              | Measured FD | BMW spec       |
+|----------------------|-------------|----------------|
+| F30 335i N55 8HP45   | 3.120       | 3.077 / 3.154  |
+| F30 340i B58 8HP50   | 2.746       | 2.813          |
+| F31 320d 8HP45       | 2.801       | 2.813          |
+| F15 X5 N57Z (AWD)    | 3.133       | 3.077–3.154    |
+| G11 7-series         | 2.546       | 2.471–2.813    |
+
+Per-gear `tailshaft_rpm / wheel_rpm` is constant within ±0.005 in upper
+gears, confirming the gradian-per-second encoding.
+
+---
+
 ---
 
 ## Torque Converter Frames
@@ -316,4 +368,12 @@ b0_t3        = nm(le_bits(raw, 36, 12))   # ~26–43 Nm, load-dependent
 # 0x0D9
 pedal_raw = le_bits(raw, 16, 12)
 pedal_pct = pedal_raw / 4095 * 100
+
+# 0x254 (4 wheels, gradians/s, 400 grad = 1 rev)
+wheels = []
+for i in (0, 2, 4, 6):
+    w = data[i] | (data[i+1] << 8)
+    valid = bool(w & 0x8000)
+    rpm   = (w & 0x7FFF) * 60.0 / 400.0
+    wheels.append((valid, rpm))
 ```
