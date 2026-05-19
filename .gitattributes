@@ -1,0 +1,4 @@
+can-2024.11.09-195154.candump filter=lfs diff=lfs merge=lfs -text
+can-2024.11.09-190250.candump filter=lfs diff=lfs merge=lfs -text
+can-2024.11.09-194107.candump filter=lfs diff=lfs merge=lfs -text
+*.candump filter=lfs diff=lfs merge=lfs -text
