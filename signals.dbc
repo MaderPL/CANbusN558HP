@@ -24,7 +24,11 @@ BO_ 167 A7_AirFuelManagement: 7 Vector__XXX
 BO_ 160 A0_TransTorqueBroadcast: 8 Vector__XXX
  SG_ Counter      :  0|16@1+ (1,0)        [0|65535]       ""    Vector__XXX
  SG_ T_Coord      : 16|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm"  Vector__XXX
+ SG_ T_SlipCap    : 32|12@1+ (0.5,-999.5) [-999.5|1048.0] "Nm"  Vector__XXX
  SG_ TurbineSpeed : 48|16@1+ (1,-2000)    [0|14000]        "rpm" Vector__XXX
+
+CM_ BO_ 160 "Frame broadcast from TCU to DME (not DME->TCU). Companion to 0x0B0.";
+CM_ SG_ 160 T_SlipCap "TCU steady-state torque ceiling, lowered as the torque-converter slips. High at TCC lockup (full mechanical clutch path), drops monotonically as slip ratio rises. Universal negative correlation with TC slip across F30/F31/F15/G11/F20 (r = -0.36 to -0.92 with slip_ratio). Saturation level is vehicle-specific and matches the gearbox/clutch torque rating: 468 Nm (F31 320d 8HP45), 579 Nm (F30 N55 8HP45), 784 Nm (F15 X5, G11 8HP70), 1024 Nm (B58, F20 = 12-bit Nm encoding ceiling = 'unlimited' flag, same pattern as B0_T1). Steady-state companion to B0_ShiftCeil (which drops only during shift events). Independent of A5 T1 actual engine torque (r ~= 0).";
 
 BO_ 176 B0_TransTorqueMgmt: 8 Vector__XXX
  SG_ AliveCounter  :  0|16@1+ (1,0)        [0|65535]       ""   Vector__XXX

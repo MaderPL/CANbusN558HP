@@ -140,14 +140,17 @@ The 0x8F signal is always smaller than A7_Sig2 (0x0A7 O32) at the same operating
 
 ---
 
-## Frame 0x0A0 — Transmission Frame A (DME → TCU torque broadcast)
+## Frame 0x0A0 — Transmission Frame A (TCU → DME torque broadcast)
 
 Rate: ~100 Hz
+Direction: ZF 8HP TCU → Bosch DME (companion frame to 0x0B0).
 
 | Signal       | Offset (bit) | Length (bit) | Scaling            | Unit | Description |
 |--------------|-------------|--------------|---------------------|------|-------------|
 | Counter      | 0           | 16           | —                   | —    | Rolling message counter (16-bit LE, monotonically increasing). Not a sensor signal. |
-| T_Coord      | 16          | 12           | Nm = (raw−1999)/2   | Nm   | Torque coordination signal broadcast from DME to TCU. Small range ≈ −7 to +0.5 Nm centered near 0 Nm. Slightly negative at cruise/WOT; briefly relaxes toward 0 during a shift event then returns negative. Exact role (shaft net trim or coordination headroom) unconfirmed. |
+| T_Coord      | 16          | 12           | Nm = (raw−1999)/2   | Nm   | Torque coordination signal from TCU. Small range ≈ −7 to +0.5 Nm centered near 0 Nm. Slightly negative at cruise/WOT; briefly relaxes toward 0 during a shift event then returns negative. Exact role (shaft net trim or coordination headroom) unconfirmed. |
+| T_SlipCap    | 32          | 12           | Nm = (raw−1999)/2   | Nm   | **TCU steady-state torque ceiling**, lowered as the torque-converter slips. High at TCC lockup (full mechanical clutch path), drops monotonically as slip ratio increases. Universal negative correlation with TC slip across F30/F31/F15/G11/F20 captures (r = −0.36 to −0.92 with slip ratio). The saturation level is vehicle-specific and matches the gearbox/clutch torque rating: 468 Nm (F31 320d 8HP45), 579 Nm (F30 N55 8HP45), 784 Nm (F15 X5, G11 8HP70), 1024 Nm (B58, F20 — i.e. saturated at 12-bit Nm max = "unlimited" flag, same pattern as B0_T1). Behaves as the steady-state companion to B0_ShiftCeil (which drops only during shifts); together they form the TCU's complete torque-coordination handshake to the DME. Independent of A5 T1 actual engine torque (r ≈ 0). |
+| flag         | 44          | 4            | constant            | —    | Bits always 0xF in observed data; likely padding / "sign-extended" marker. |
 | TurbineSpeed | 48          | 16           | rpm = raw − 2000    | rpm  | Torque converter turbine shaft speed. At idle/stall: raw ≈ 2000 → 0 rpm. At lockup (engine ≈ 3300 rpm): raw ≈ 5300 → turbine ≈ 3300 rpm. Slip ratio = TurbineSpeed / EngineRPM rises from 0 (stall) to ≈ 0.98+ (lockup). Staircase pattern during WOT upshifts: turbine drops at each shift and recovers in the new gear ratio. |
 
 ### Turbine speed at key operating points
@@ -158,6 +161,23 @@ Rate: ~100 Hz
 | Light cruise    | 1500      | ~3100     | 1100        | 0.73       |
 | 2nd gear WOT   | 3300      | ~5263     | 3263        | 0.99       |
 | Lockup (cruise) | 2400      | ~4400     | 2400        | 1.00       |
+
+### T_SlipCap vs TC slip — cross-vehicle correlation
+
+Pearson r between T_SlipCap and `slip_ratio = 1 − turbine/engine_rpm`:
+
+| Vehicle              | r(T_SlipCap, slip_ratio) | mean@lockup (Nm) | mean@stall (Nm) | saturation (Nm) |
+|----------------------|--------------------------|------------------|-----------------|-----------------|
+| F30 N55 8HP45 335i   | −0.36                    | 531              | 334             | 579             |
+| F30 B58 8HP50 340i   | −0.59                    | 972              | 308             | 1024 (max)      |
+| F31 320d 8HP45       | **−0.92**                | 468              | 280             | 468             |
+| F15 X5 N57Z (AWD)    | −0.78                    | 774              | 414             | 784             |
+| G11 7-series         | −0.69                    | 777              | 339             | 784             |
+| F20 1-series (dyno)  | −0.44                    | 885              | 299             | 1024 (max)      |
+
+The 1024 Nm saturation in B58/F20 captures equals the 12-bit Nm encoding
+ceiling (`raw=4095 → Nm=1048` saturated to display 1024) — same "unlimited"
+flag pattern as `B0_T1` in frame 0x0B0.
 
 ---
 
@@ -363,8 +383,9 @@ a7_sig2     = le_bits(raw, 32, 16)       # 16-bit torque-related signal (TBD enc
 # 0x8F
 x8f_sig1 = le_bits(raw, 16, 16)          # 16-bit torque-related signal (TBD encoding)
 
-# 0x0A0
-t_coord      = nm(le_bits(raw, 16, 12))        # coordination trim to TCU
+# 0x0A0 (TCU -> DME)
+t_coord      = nm(le_bits(raw, 16, 12))        # coordination trim from TCU
+t_slipcap    = nm(le_bits(raw, 32, 12))        # TCU steady-state torque ceiling (drops with TC slip)
 turbine_rpm  = le_bits(raw, 48, 16) - 2000     # turbine speed (0 at stall)
 
 # 0x0B0
