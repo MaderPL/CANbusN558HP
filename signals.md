@@ -1,17 +1,41 @@
-# BMW CAN Signal Documentation
+# BMW PT-CAN Signal Documentation
 
-Primary vehicle: BMW F30 3-series, VIN WBA3A9C5XFKW74642  
-Engine: N55/N558HP (Bosch ME17.2 DME)  
-Encoding: Little-endian (Intel byte order), ARM Cortex-M7 GCC bitfield-compatible
+**Primary vehicle:** WBA3A9C5XFKW74642 (F30 BMW 3-series, N55/N558HP engine, ZF 8HP45 transmission)  
+**DME:** Bosch ME17.2  
+**Encoding:** Little-endian (Intel byte order), ARM Cortex-M7 GCC bitfield-compatible  
+**Differential ratio:** 3.15 (F30 335i N55 — see measured values in 0x254 section)  
+**Wheel circumference:** ~2.09 m (225/45R17)  
+**Bus:** PT-CAN (powertrain CAN)
 
-Signal presence across captured vehicles:
+## Cross-vehicle validation summary
 
-| Frame | F30 N55 | F30 B58 | F31 320d | F15 X5 N57Z | F20 | G11 |
-|-------|---------|---------|----------|-------------|-----|-----|
-| 0x08F (reinf) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 0x0A5 (engine RPM) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Vehicle | Engine | Trans | 0x0A5–0x0A7 | 0x145 | 0x1AF/0x1B0 | CAN ID format |
+|---------|--------|-------|------------|-------|-------------|---------------|
+| F30 335i N55 (primary) | N55 petrol | ZF 8HP45 | ✓ | active | 0x1AF ✓ 6-gear | 3-digit padded (0A6) |
+| F30 335i N55 8HP45 | N55 petrol | ZF 8HP45 | ✓ | active | 0x1AF ✓ 8-gear | 3-digit padded |
+| F30 330i B58 | B58 petrol | ZF 8HP50 | ✓ | active | 0x1AF ✓ 8-gear | 3-digit padded |
+| F15 X5 N57Z | N57Z diesel | ZF 8HP | ✓ | **SNA (0xFFFF)** | 0x1AF ✓ | 3-digit padded |
+| F20 | petrol | — | ✓ (can1) | active | 0x1AF (can2) | **unpadded (A6)** |
+| F31 320d | N47 diesel | ZF 8HP | ✓ | **SNA (0xFFFF)** | 0x1AF ✓ 8-gear | **unpadded (A6)** |
+| G11 7-series | diesel | ZF 8HP | ✓ | **SNA (0xFFFF)** | **0x1B0** ✓ | 3-digit padded |
+
+Signal presence by frame:
+
+| Frame | F30 N55 | F30 B58 | F31 320d | F15 N57Z | F20 | G11 |
+|-------|---------|---------|----------|----------|-----|-----|
+| 0x08F (reinf/output torque) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 0x0A5 (engine RPM/torque) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 0x0A6 (torque coord) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 0x0A7 (demand/drivetrain torque) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 0x145 (EGS shift ref) | ✓ active | ✓ active | **SNA** | **SNA** | ✓ active | **SNA** |
 | 0x1AF (turbine/tailshaft) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | 0x1B0 (turbine/tailshaft) | — | — | — | — | — | ✓ |
+
+**Key cross-vehicle findings:**
+- 0x145 is **petrol-only** — all diesel vehicles (N57Z, N47, G11) send 0xFFFF (SNA).
+- F20 uses **two buses**: can1 carries PT signals (0x0A5–0x0A7, 0x145), can2 carries 0x1AF.
+- F20 and F31 320d candumps use **unpadded hex frame IDs** (e.g. `A6` not `0A6`) — parsers must normalise both formats.
+- G11 uses **0x1B0** instead of 0x1AF, with tailshaft and turbine signals in reversed byte order.
 
 Signal extraction formula:
 ```python
@@ -51,7 +75,7 @@ Rate: ~100 Hz
 |-----------------|-------------|--------------|-------------------|------|-------------|
 | T1_Torque_Actual | 16         | 12           | Nm = (raw−1999)/2 | Nm   | Actual indicated engine torque. Matches A6 T_Act closely (r = 0.971). |
 | T2_Torque_Setpoint | 28      | 12           | Nm = (raw−1999)/2 | Nm   | Rate-limited torque setpoint. Identical to T1 in 95.6% of frames; lags behind T1 during rapid transients. During torque-coordination interventions T2 can diverge widely from T1. |
-| RPM             | 40          | 16           | rpm = raw × 0.25  | rpm  | Engine speed |
+| RPM             | 40          | 16           | rpm = raw × 0.25  | rpm  | Engine speed. Confirmed on N55 and B58. |
 
 ---
 
@@ -89,9 +113,14 @@ Net shaft torque = T_Act + T_Loss (T_Loss is already negative).
 | 3500–3999 | −21             |
 | 4000–4999 | −26             |
 
+**Cross-vehicle notes:**
+- **F30 B58 (petrol):** identical decoding; T_Max mode = 445 Nm (vs 434 Nm on N55). Peaks seen at 649 Nm suggest a tuned engine.
+- **F31 320d (diesel):** T_Loss range −66 to −22.5 Nm; T_Max bimodal at ~236 Nm and ~390–400 Nm. T_Act peaks at 403 Nm. Decoding formula valid.
+- **F15 X5 N57Z (diesel):** T_Max bimodal at ~322 Nm and ~750 Nm. Treat T_Max / T_Cut with caution for N57Z.
+
 ---
 
-## Frame 0x0A7 — Torque & Unknown Signal
+## Frame 0x0A7 — Torque & Drivetrain Signal
 
 Rate: ~50 Hz  
 Frame length: 7 bytes.
@@ -126,6 +155,19 @@ Per-gear OLS of A7_dec ~ T_Act at TC lockup (slip ≥ 0.95). Slopes closely trac
 | 8    | 0.667  | 0.628       | 0.628         | 0.980  | 4.1 Nm |
 
 Mean A7/T_Act tracks GR to within 4–8%. At WOT in 4th gear the ratio converges to GR₄=1.667 within 0–1.5%.
+
+### A7_Sig2 per-gear raw statistics (N55 8HP45, 49K frames)
+
+| Gear | n     | mean raw | range         | mean decoded (Nm) |
+|------|-------|----------|---------------|-------------------|
+| 1st  | 1400  | 33589    | 32243–35212   | 207               |
+| 2nd  | 1325  | 33016    | 31712–33805   | 136               |
+| 3rd  | 6546  | 32274    | 31577–33402   | 43                |
+| 4th  | 3406  | 32222    | 31670–32949   | 36                |
+| 5th  | 10666 | 32129    | 31742–32816   | 25                |
+| 6th  | 12485 | 32129    | 31807–32644   | 25                |
+| 7th  | 1493  | 32195    | 31842–32565   | 33                |
+| 8th  | 2258  | 32045    | 31872–32253   | 14                |
 
 ---
 
@@ -229,12 +271,80 @@ Rate: ~50 Hz
 
 ---
 
+## Frame 0x145 — EGS Shift Load Reference (DME)
+
+| Signal | Offset (bit) | Length (bit) | Formula | Notes |
+|--------|-------------|--------------|---------|-------|
+| EGS shift load ref (ch1) | 16 | 16 | See below | Redundant pair with O32; used by EGS for shift scheduling |
+| EGS shift load ref (ch2) | 32 | 16 | Identical to O16 | Safety redundancy |
+
+**SNA value:** 0xFFFF (65535) — transmitted by all diesel DMEs.
+
+**Function:** Higher values → upshift sooner (lower RPM, economy zone). Lower values → hold gear (high-load zone).
+
+```python
+raw145 = le_bits(data, 16, 16)   # O16 L16 Intel LE (ch1)
+```
+
+**Formula — per-gear (best accuracy):**
+
+```
+raw145 = a × T_Loss + b × T_Act + c
+```
+
+Where `T_Loss` and `T_Act` are in Nm from 0x0A6.
+
+| Gear | a      | b      | c     | R²    | RMS (counts) |
+|------|--------|--------|-------|-------|--------------|
+| 1st  | +62.49 | −5.628 | 33977 | 0.733 | 185          |
+| 2nd  | +20.59 | −2.149 | 32396 | 0.637 |  67          |
+| 3rd  |  +5.03 | −0.288 | 31823 | 0.608 |  19          |
+| 4th  |  +4.14 | −0.133 | 31819 | 0.843 |  10          |
+| 5th  |  +3.84 | −0.222 | 31882 | 0.864 |   9          |
+| 6th  |  +2.56 | −0.172 | 31895 | 0.792 |   7          |
+
+**Formula — global (cross-gear, TC-locked, kph > 5):**
+
+```python
+gear_ratio = turbine_RPM / tailshaft_RPM    # from 0x1AF
+raw145 ≈ -268.4 × gear_ratio + 4.30 × T_Loss - 0.28 × T_Act + 32340
+# R² = 0.88, RMS = 79 counts (n = 35,115 TC-locked points)
+```
+
+**Observed mean per gear (N55 primary):**
+
+| Gear | mean raw145 | typical kph |
+|------|------------|-------------|
+| P/N  | ~29,381    | 0           |
+| 1st  | ~30,680    | 5–32        |
+| 2nd  | ~31,301    | 5–52        |
+| 3rd  | ~31,623    | 17–92       |
+| 4th  | ~31,729    | 33–95       |
+| 5th  | ~31,786    | 43–92       |
+| 6th  | ~31,839    | 46–92       |
+| 7th  | ~31,822    | (from N55 8HP data) |
+| 8th  | ~31,840    | (from N55 8HP data) |
+
+**Cross-vehicle validation:**
+- **F30 B58 8HP50 (petrol):** same structure. 1st gear produces *highest* signal (32,135 mean) vs N55 where 1st is *lowest* (30,680).
+- **F15 X5 N57Z / F31 320d / G11 (diesel):** `raw = 0xFFFF` — SNA. Confirmed petrol-specific.
+
+---
+
+## Frame 0x173 — Brake Pedal Status (DSC)
+
+| Signal | Offset (bit) | Length (bit) | Formula | Unit | Notes |
+|--------|-------------|--------------|---------|------|-------|
+| Brake pedal status | 56 | 2 | `(byte7) & 0x03` | — | 0 = not pressed, 3 = pressed. |
+
+---
+
 ## Frame 0x254 — Wheel Speeds (DSC broadcast)
 
-Rate: ~50 Hz
-Frame length: 8 bytes (4 × 16-bit fields, one per wheel, little-endian).
+Rate: ~50 Hz  
+Frame length: 8 bytes (4 × 16-bit fields, one per wheel, little-endian).  
 Encoding: lower 15 bits = wheel angular velocity in **gradians/second**
-(400 gradians = 1 wheel revolution); bit 15 = validity flag (1 = valid).
+(400 gradians = 1 wheel revolution); bit 15 = validity flag (1 = valid).  
 Invalid pattern: lower 15 bits all set (0x7FFF), full word 0xFFFF / 0x7FFF.
 
 | Signal         | Offset (bit) | Length (bit) | Scaling                | Unit   | Description |
@@ -278,8 +388,6 @@ Measured FD values, robust median over gears 5-8:
 
 Per-gear `tailshaft_rpm / wheel_rpm` is constant within ±0.005 in upper
 gears, confirming the gradian-per-second encoding.
-
----
 
 ---
 
@@ -391,7 +499,7 @@ t_demand_nm = nm(le_bits(raw, 12, 12))   # driver demand torque
 a7_sig2_nm  = nm16(le_bits(raw, 32, 16)) # 16-bit torque (T_Act×GR at WOT lockup; step-down at upshifts)
 
 # 0x8F
-x8f_sig1_nm = nm16(le_bits(raw, 16, 16)) # 16-bit torque (≈T_Net at high-RPM TC lockup; ≈T_Act at stall)
+x8f_sig1_nm = nm16(le_bits(raw, 16, 16)) # 16-bit torque (≈T_Net×GR at lockup; floor at stall/cut)
 
 # 0x0A0
 t_coord      = nm(le_bits(raw, 16, 12))        # coordination trim to TCU
@@ -414,3 +522,21 @@ for i in (0, 2, 4, 6):
     rpm   = (w & 0x7FFF) * 60.0 / 400.0
     wheels.append((valid, rpm))
 ```
+
+---
+
+## Capture summary — can-2024.11.09-194107.candump (primary)
+
+| Time (s) | Event | Speed | Gear |
+|----------|-------|-------|------|
+| 0–13.75 | Stationary, brake held | 0 kph | P/N |
+| 13.75 | Brake released, pulling away | 0 → | 1st |
+| 13.75–22 | Hard acceleration | 0–49 kph | 1st → 2nd |
+| 22–27 | Continued acceleration | 49–66 kph | 2nd → 3rd |
+| 27–36 | Acceleration to cruise | 66–71 kph | 3rd → 4th |
+| 36–36.64 | Throttle lift, engine overrun | 71 → 68 kph | 4th → 5th |
+| 36.64 | Brake pressed | 68 kph | 5th |
+| 36.64–44.51 | Braking | 68 → 44 kph | 5th |
+| 44.51 | Brake released | 44 kph | 5th |
+| 44.51–52 | Constant speed / gentle acceleration | 43–47 kph | 5th |
+| 52+ | Upshift, gentle acceleration | 47–49+ kph | 6th |
