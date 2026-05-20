@@ -204,17 +204,18 @@ Frame length: 8 bytes (4 × 16-bit fields, one per wheel, little-endian).
 Encoding: lower 15 bits = wheel angular velocity in **gradians/second**
 (400 gradians = 1 wheel revolution); bit 15 = validity flag (1 = valid).
 Invalid pattern: lower 15 bits all set (0x7FFF), full word 0xFFFF / 0x7FFF.
+Field order is **rear-first**: RL, RR, FL, FR.
 
 | Signal         | Offset (bit) | Length (bit) | Scaling                | Unit   | Description |
 |----------------|-------------|--------------|------------------------|--------|-------------|
-| WheelSpeed_FL  | 0           | 15           | rpm = raw × 60 / 400   | grad/s | Front-left wheel  |
-| Valid_FL       | 15          | 1            | —                      | —      | 1 = signal valid  |
-| WheelSpeed_FR  | 16          | 15           | rpm = raw × 60 / 400   | grad/s | Front-right wheel |
-| Valid_FR       | 31          | 1            | —                      | —      | 1 = signal valid  |
-| WheelSpeed_RL  | 32          | 15           | rpm = raw × 60 / 400   | grad/s | Rear-left wheel   |
-| Valid_RL       | 47          | 1            | —                      | —      | 1 = signal valid  |
-| WheelSpeed_RR  | 48          | 15           | rpm = raw × 60 / 400   | grad/s | Rear-right wheel  |
-| Valid_RR       | 63          | 1            | —                      | —      | 1 = signal valid  |
+| WheelSpeed_RL  | 0           | 15           | rpm = raw × 60 / 400   | grad/s | Rear-left wheel   |
+| Valid_RL       | 15          | 1            | —                      | —      | 1 = signal valid  |
+| WheelSpeed_RR  | 16          | 15           | rpm = raw × 60 / 400   | grad/s | Rear-right wheel  |
+| Valid_RR       | 31          | 1            | —                      | —      | 1 = signal valid  |
+| WheelSpeed_FL  | 32          | 15           | rpm = raw × 60 / 400   | grad/s | Front-left wheel  |
+| Valid_FL       | 47          | 1            | —                      | —      | 1 = signal valid  |
+| WheelSpeed_FR  | 48          | 15           | rpm = raw × 60 / 400   | grad/s | Front-right wheel |
+| Valid_FR       | 63          | 1            | —                      | —      | 1 = signal valid  |
 
 ```python
 def wheel_speeds(data: bytes):
@@ -225,8 +226,14 @@ def wheel_speeds(data: bytes):
         raw   = w & 0x7FFF
         rpm   = raw * 60.0 / 400.0    # gradians/s -> rpm
         out.append((valid, rpm))
-    return out  # [(valid, rpm) for FL, FR, RL, RR]
+    return out  # [(valid, rpm) for RL, RR, FL, FR]
 ```
+
+The rear-first ordering was confirmed by the F20 dyno capture: on a 2WD
+dyno only the driven (rear) wheels turn, so the two front sensors are
+marked invalid (0x7FFF) while the two rear fields carry live data. On
+road captures (F30, F31, F15, G11) all four wheels remain valid, which
+is consistent with — but does not disambiguate — the field order.
 
 Final-drive ratio recovery (paired with 0x1AF tailshaft):
 
@@ -369,11 +376,11 @@ b0_t3        = nm(le_bits(raw, 36, 12))   # ~26–43 Nm, load-dependent
 pedal_raw = le_bits(raw, 16, 12)
 pedal_pct = pedal_raw / 4095 * 100
 
-# 0x254 (4 wheels, gradians/s, 400 grad = 1 rev)
+# 0x254 (4 wheels, gradians/s, 400 grad = 1 rev, order RL/RR/FL/FR)
 wheels = []
 for i in (0, 2, 4, 6):
     w = data[i] | (data[i+1] << 8)
     valid = bool(w & 0x8000)
     rpm   = (w & 0x7FFF) * 60.0 / 400.0
-    wheels.append((valid, rpm))
+    wheels.append((valid, rpm))   # RL, RR, FL, FR
 ```
