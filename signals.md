@@ -33,7 +33,7 @@ Signal presence by frame:
 
 **Key cross-vehicle findings:**
 - 0x145 is **petrol-only** — all diesel vehicles (N57Z, N47, G11) send 0xFFFF (SNA).
-- F20 uses **two buses**: can1 carries PT signals (0x0A5–0x0A7, 0x145), can2 carries 0x1AF.
+- F20 bus assignment depends on recording setup: in single-bus captures all PT signals (0x0A5–0x0A7, 0x145, 0x1AF) appear on can1; in multi-bus captures 0x145 and torque frames appear on can2, with can1 carrying a different bus. Some 2023.03.13 F20 files contain no PT-CAN IDs at all (K-CAN/body bus only).
 - F20 and F31 320d candumps use **unpadded hex frame IDs** (e.g. `A6` not `0A6`) — parsers must normalise both formats.
 - G11 uses **0x1B0** instead of 0x1AF, with tailshaft and turbine signals in reversed byte order.
 
@@ -273,20 +273,27 @@ Rate: ~50 Hz
 
 ## Frame 0x145 — EGS Shift Load Reference (DME)
 
+Frame length: 8 bytes.
+
 | Signal | Offset (bit) | Length (bit) | Formula | Notes |
 |--------|-------------|--------------|---------|-------|
-| EGS shift load ref (ch1) | 16 | 16 | See below | Redundant pair with O32; used by EGS for shift scheduling |
-| EGS shift load ref (ch2) | 32 | 16 | Identical to O16 | Safety redundancy |
+| Counter | 0 | 16 | — | Rolling 16-bit counter (bytes 0–1) |
+| ShiftRef_A | 16 | 16 | See below | Primary EGS shift load reference (bytes 2–3) |
+| ShiftRef_B | 32 | 16 | Identical to ShiftRef_A | Safety-redundant copy (bytes 4–5). Lags ShiftRef_A by exactly one frame (~10 ms) during rapid deceleration on some EGS firmware variants (B58 observed). |
+| ShiftRef_C | 48 | 16 | TBD | Independent signal (bytes 6–7). Range ~31,900–32,400 at cruise; does not track ShiftRef_A. May be a second DME computation path or a different scheduler output. Not previously documented. |
 
-**SNA value:** 0xFFFF (65535) — transmitted by all diesel DMEs.
+**SNA value:** 0xFFFF (65535) — transmitted by all diesel DMEs.  
+**Standby/engine-off default:** ~32,000 (0x7D00) or ~31,993 — broadcast when DME is not actively computing a load reference (engine off, fuel cut, all torque signals simultaneously SNA).
 
-**Function:** Higher values → upshift sooner (lower RPM, economy zone). Lower values → hold gear (high-load zone).
+**Function:** Higher values → upshift sooner (economy zone). Lower values → hold gear (high-load zone).
 
 ```python
-raw145 = le_bits(data, 16, 16)   # O16 L16 Intel LE (ch1)
+raw145 = le_bits(data, 16, 16)   # ShiftRef_A: bytes 2–3, Intel LE
+raw145b = le_bits(data, 32, 16)  # ShiftRef_B: bytes 4–5 (redundant copy)
+raw145c = le_bits(data, 48, 16)  # ShiftRef_C: bytes 6–7 (independent)
 ```
 
-**Formula — per-gear (best accuracy):**
+**Formula — per-gear (best accuracy, N55 primary):**
 
 ```
 raw145 = a × T_Loss + b × T_Act + c
@@ -311,23 +318,26 @@ raw145 ≈ -268.4 × gear_ratio + 4.30 × T_Loss - 0.28 × T_Act + 32340
 # R² = 0.88, RMS = 79 counts (n = 35,115 TC-locked points)
 ```
 
-**Observed mean per gear (N55 primary):**
+**Cross-vehicle per-gear means (cruise/steady-state):**
 
-| Gear | mean raw145 | typical kph |
-|------|------------|-------------|
-| P/N  | ~29,381    | 0           |
-| 1st  | ~30,680    | 5–32        |
-| 2nd  | ~31,301    | 5–52        |
-| 3rd  | ~31,623    | 17–92       |
-| 4th  | ~31,729    | 33–95       |
-| 5th  | ~31,786    | 43–92       |
-| 6th  | ~31,839    | 46–92       |
-| 7th  | ~31,822    | (from N55 8HP data) |
-| 8th  | ~31,840    | (from N55 8HP data) |
+| Gear | N55 ref | N55 8HP (file2) | B58 8HP50 | F20 petrol |
+|------|---------|-----------------|-----------|------------|
+| P/N  | ~29,381 | —               | —         | —          |
+| 1st  | ~30,680 | 31,702 (+1022)  | 31,848 (+1168) | 31,871 (+1191) |
+| 2nd  | ~31,301 | 31,575 (+274)   | 31,865 (+564)  | 31,803 (+502)  |
+| 3rd  | ~31,623 | 31,630 (+7)     | 31,671 (+48)   | 31,810 (+187)  |
+| 4th  | ~31,729 | 31,675 (−54)    | 31,776 (+47)   | 31,839 (+110)  |
+| 5th  | ~31,786 | 31,676 (−110)   | 31,789 (+3)    | 31,834 (+48)   |
+| 6th  | ~31,839 | 31,791 (−48)    | 31,831 (−8)    | 31,828 (−11)   |
+| 7th  | ~31,822 | 31,693 (−129)   | 31,777 (−45)   | 31,818 (−4)    |
+| 8th  | ~31,840 | 31,615 (−225)   | 31,863 (+23)   | 31,808 (−32)   |
+
+Offsets in parentheses are raw counts vs N55 primary reference. Gears 5–8 agree within ±250 across all petrol engines; gears 1–2 show consistent +500–1200 positive offset driven by higher clutch/launch loads.
 
 **Cross-vehicle validation:**
-- **F30 B58 8HP50 (petrol):** same structure. 1st gear produces *highest* signal (32,135 mean) vs N55 where 1st is *lowest* (30,680).
-- **F15 X5 N57Z / F31 320d / G11 (diesel):** `raw = 0xFFFF` — SNA. Confirmed petrol-specific.
+- **F30 N55 8HP45, B58 8HP50, F20 petrol:** formula structure confirmed. Per-gear means align within ±250 counts for gears 3–8.
+- **F20 specific:** 0x145 is on **can2** in multi-bus recordings; on can1 in single-bus captures. ID is unpadded (`145` not `0145`). Only `can-2023.02.01-161918.candump` contains active driving data; all other F20 files with 0x145 present show the engine-off standby constant (~32,000).
+- **F15 X5 N57Z / F31 320d / G11 (diesel):** 100% 0xFFFF — SNA confirmed on every frame across all diesel logs.
 
 ---
 
@@ -435,6 +445,14 @@ tailshaft_rpm = (data[5] | (data[6] << 8)) - 2000
 
 Both signals share the 2000 RPM offset: raw 2000 (0x07D0) = 0 RPM. Negative
 decoded values indicate the signal is invalid or the vehicle is stationary.
+
+**SNA pattern:** raw value 0xD007 (53255) on both channels = signal not available (e.g. EGS not ready). After subtracting offset this decodes to 51255 RPM, giving turbine/tailshaft ratio ≈ 1.0 which falsely classifies as 6th gear. Always filter `raw != 0xD007` before gear identification:
+
+```python
+if turbine_raw != 0xD007 and tailshaft_raw != 0xD007:
+    turbine_rpm   = turbine_raw - 2000
+    tailshaft_rpm = tailshaft_raw - 2000
+```
 
 ### Frame 0x1B0 — Turbine & Tailshaft Speed (G11 7-series)
 
