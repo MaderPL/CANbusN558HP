@@ -33,7 +33,7 @@ Signal presence by frame:
 
 **Key cross-vehicle findings:**
 - 0x145 is **petrol-only** — all diesel vehicles (N57Z, N47, G11) send 0xFFFF (SNA).
-- F20 uses **two buses**: can1 carries PT signals (0x0A5–0x0A7, 0x145), can2 carries 0x1AF.
+- F20 bus assignment depends on recording setup: in single-bus captures all PT signals (0x0A5–0x0A7, 0x145, 0x1AF) appear on can1; in multi-bus captures 0x145 and torque frames appear on can2, with can1 carrying a different bus. Some 2023.03.13 F20 files contain no PT-CAN IDs at all (K-CAN/body bus only).
 - F20 and F31 320d candumps use **unpadded hex frame IDs** (e.g. `A6` not `0A6`) — parsers must normalise both formats.
 - G11 uses **0x1B0** instead of 0x1AF, with tailshaft and turbine signals in reversed byte order.
 
@@ -293,61 +293,184 @@ Rate: ~50 Hz
 
 ## Frame 0x145 — EGS Shift Load Reference (DME)
 
+Frame length: 8 bytes. Rate: ~100 Hz (same as 0x0A6).
+
 | Signal | Offset (bit) | Length (bit) | Formula | Notes |
 |--------|-------------|--------------|---------|-------|
-| EGS shift load ref (ch1) | 16 | 16 | See below | Redundant pair with O32; used by EGS for shift scheduling |
-| EGS shift load ref (ch2) | 32 | 16 | Identical to O16 | Safety redundancy |
+| Counter | 0 | 16 | — | Rolling 16-bit counter (bytes 0–1) |
+| ShiftRef_A | 16 | 16 | See below | Primary EGS shift load reference (bytes 2–3) |
+| ShiftRef_B | 32 | 16 | Identical to ShiftRef_A | Safety-redundant copy (bytes 4–5). On B58/F20 lags ShiftRef_A by exactly one CAN frame (~10 ms) during rapid deceleration — EGS firmware write-order artifact. On N55 the two are always frame-synchronous. |
+| ShiftRef_C | 48 | 16 | See below | Third reference signal (bytes 6–7). Exact alias of ShiftRef_A on B58/F20; independent engine-torque-based computation on N55 F30. |
 
-**SNA value:** 0xFFFF (65535) — transmitted by all diesel DMEs.
+**SNA value:** 0xFFFF (65535) — transmitted by all diesel DMEs.  
+**Standby/engine-off default:** ~32,000 (0x7D00) — broadcast when DME is not actively computing (engine off, fuel cut).
 
-**Function:** Higher values → upshift sooner (lower RPM, economy zone). Lower values → hold gear (high-load zone).
+**Function:** Higher values → upshift sooner (economy/part-load). Lower values → hold gear (high-load/kick-down inhibit).
 
 ```python
-raw145 = le_bits(data, 16, 16)   # O16 L16 Intel LE (ch1)
+raw145  = le_bits(data, 16, 16)   # ShiftRef_A
+raw145b = le_bits(data, 32, 16)   # ShiftRef_B (redundant copy, lag possible on B58)
+raw145c = le_bits(data, 48, 16)   # ShiftRef_C (alias on B58/F20, independent on N55)
 ```
 
-**Formula — per-gear (best accuracy):**
+---
+
+### ShiftRef_A — Friction/drag-based shift reference
+
+**Formula (per gear):**
 
 ```
-raw145 = a × T_Loss + b × T_Act + c
+ShiftRef_A = a × T_Loss + b × T_Act + c
 ```
 
-Where `T_Loss` and `T_Act` are in Nm from 0x0A6.
+`T_Loss` and `T_Act` in Nm from 0x0A6. `T_Loss` dominates; `b` is small and negative.  
+All coefficients are positive for `a`; `c` increases monotonically from 1st to 8th gear (lower gear → lower base value → EGS more likely to upshift under load).
 
-| Gear | a      | b      | c     | R²    | RMS (counts) |
-|------|--------|--------|-------|-------|--------------|
-| 1st  | +62.49 | −5.628 | 33977 | 0.733 | 185          |
-| 2nd  | +20.59 | −2.149 | 32396 | 0.637 |  67          |
-| 3rd  |  +5.03 | −0.288 | 31823 | 0.608 |  19          |
-| 4th  |  +4.14 | −0.133 | 31819 | 0.843 |  10          |
-| 5th  |  +3.84 | −0.222 | 31882 | 0.864 |   9          |
-| 6th  |  +2.56 | −0.172 | 31895 | 0.792 |   7          |
-
-**Formula — global (cross-gear, TC-locked, kph > 5):**
+**Global cross-gear formula (TC-locked points, kph > 5):**
 
 ```python
 gear_ratio = turbine_RPM / tailshaft_RPM    # from 0x1AF
-raw145 ≈ -268.4 × gear_ratio + 4.30 × T_Loss - 0.28 × T_Act + 32340
-# R² = 0.88, RMS = 79 counts (n = 35,115 TC-locked points)
+ShiftRef_A ≈ -268.4 × gear_ratio + 4.30 × T_Loss - 0.28 × T_Act + 32340
+# R² = 0.88, RMS = 79 counts (n = 35,115 TC-locked)
 ```
 
-**Observed mean per gear (N55 primary):**
+#### Per-gear OLS coefficients — N55/8HP45 primary log (`can-2024.11.09-194107`)
 
-| Gear | mean raw145 | typical kph |
-|------|------------|-------------|
-| P/N  | ~29,381    | 0           |
-| 1st  | ~30,680    | 5–32        |
-| 2nd  | ~31,301    | 5–52        |
-| 3rd  | ~31,623    | 17–92       |
-| 4th  | ~31,729    | 33–95       |
-| 5th  | ~31,786    | 43–92       |
-| 6th  | ~31,839    | 46–92       |
-| 7th  | ~31,822    | (from N55 8HP data) |
-| 8th  | ~31,840    | (from N55 8HP data) |
+| Gear | N      | a (T_Loss) | b (T_Act) | c (intercept) | R²    | σ (counts) |
+|------|--------|-----------|-----------|--------------|-------|-----------|
+| 1st  | 1,368  | +56.83    | −6.95     | 32,764        | 0.763 | 231       |
+| 2nd  | 1,404  | +27.50    | −2.87     | 32,314        | 0.643 |  99       |
+| 3rd  | 6,825  |  +4.80    | −0.25     | 31,753        | 0.553 |  22       |
+| 4th  | 3,829  |  +3.93    | −0.11     | 31,813        | 0.759 |  14       |
+| 5th  | 11,024 |  +3.77    | −0.21     | 31,880        | 0.843 |   9       |
+| 6th  | 12,707 |  +2.56    | −0.17     | 31,899        | 0.778 |   7       |
+| 7th  | 1,677  |  +2.22    | −0.10     | 31,902        | 0.744 |   9       |
+| 8th  | 2,345  |  +1.59    | −0.14     | 31,914        | 0.787 |   4       |
+
+#### Per-gear OLS coefficients — N55/8HP45 extended log (`can-2024.11.09-190250`)
+
+| Gear | N      | a      | b     | c      | R²    | σ  |
+|------|--------|--------|-------|--------|-------|----|
+| 1st  | 10,565 | +16.22 | −2.03 | 31,315 | 0.324 | 382|
+| 2nd  | 10,790 | +12.48 | −0.09 | 31,634 | 0.573 | 172|
+| 3rd  | 12,552 |  +5.29 | −0.18 | 31,748 | 0.606 |  44|
+| 4th  | 12,527 |  +5.13 | −0.16 | 31,837 | 0.886 |  20|
+| 5th  | 27,636 |  +3.51 | −0.12 | 31,863 | 0.825 |  14|
+| 6th  | 29,426 |  +2.89 | −0.14 | 31,898 | 0.864 |  10|
+| 7th  | 12,031 |  +1.85 | −0.05 | 31,883 | 0.790 |   8|
+| 8th  | 28,192 |  +2.01 | −0.13 | 31,929 | 0.491 |  12|
+
+#### Per-gear OLS coefficients — B58/8HP50 (`can-2024.11.05-162503`)
+
+| Gear | N      | a      | b     | c      | R²    | σ   |
+|------|--------|--------|-------|--------|-------|-----|
+| 1st  | 14,902 | +12.89 | −3.10 | 31,761 | 0.923 | 112 |
+| 2nd  | 24,698 |  +8.37 | −0.45 | 31,758 | 0.946 |  44 |
+| 3rd  |  4,592 |  +5.29 | +0.03 | 31,837 | 0.912 |  35 |
+| 4th  |  5,429 |  +3.61 | +0.01 | 31,890 | 0.271 |  40 |
+| 5th  |  3,307 |  +4.35 | +0.07 | 31,952 | 0.243 |  28 |
+| 6th  | 11,966 |  +1.01 | −0.03 | 31,901 | 0.115 |  12 |
+| 7th  | 41,052 |  +2.18 | +0.02 | 31,948 | 0.319 |   7 |
+| 8th  | 28,507 |  +1.53 | +0.01 | 31,951 | 0.863 |   6 |
+
+#### Per-gear OLS coefficients — F20/N55 8HP (`GCU2202025-can-2023.02.01-161918`)
+
+| Gear | N     | a      | b     | c      | R²    | σ   |
+|------|-------|--------|-------|--------|-------|-----|
+| 1st  | 2,235 | +13.83 | −3.53 | 31,730 | 0.941 | 111 |
+| 2nd  | 2,945 |  +7.27 | −1.55 | 31,793 | 0.908 |  80 |
+| 3rd  | 2,582 |  +4.05 | −0.49 | 31,858 | 0.622 | 101 |
+| 4th  | 2,498 |  +3.90 | −0.18 | 31,915 | 0.432 |  60 |
+| 5th  | 1,240 |  +3.11 | −0.01 | 31,896 | 0.372 |  34 |
+| 6th  | 1,046 |  +3.40 | +0.07 | 31,956 | 0.099 |  27 |
+| 7th  | 3,083 |  +0.09 | +0.03 | 31,875 | 0.060 |  17 |
+| 8th  | 8,382 |  +1.01 | +0.10 | 31,922 | 0.841 |   5 |
+
+#### Coefficient scaling law
+
+The `a` coefficient scales with gear ratio as a power law: **`a ∝ gear_ratio^α`**.
+
+Fitting `log(a) = α × log(ratio) + const` over gears 1–8:
+
+| Log | α exponent | Pearson r |
+|-----|-----------|-----------|
+| N55 extended (190250) | 1.17 | 0.983 |
+| B58 (162503)          | 1.17 | 0.917 |
+| N55 primary (194107)  | 1.80 | 0.953 |
+| F20 (161918)          | 1.74 | 0.761 |
+
+**Interpretation:** `a` scales approximately as `1/gear_ratio` (α ≈ 1.2 in the larger N55 and B58 logs). This means `a × gear_ratio` is roughly constant — consistent with the DME applying T_Loss on the input-shaft (not the output-shaft) side: input-shaft torque = output torque / gear_ratio, so the sensitivity of the shift reference to T_Loss is inversely proportional to gear ratio.
+
+The intercept `c` rises monotonically from ~31,750 (3rd) to ~31,950 (8th). Physical meaning: at zero T_Loss and T_Act the shift reference converges to a gear-dependent base level. Higher gears have higher base values → EGS is biased toward upshifting.
+
+**Cross-vehicle per-gear means at cruise/steady-state:**
+
+| Gear | N55 ref | N55 8HP ext | B58 8HP50 | F20 petrol |
+|------|---------|-------------|-----------|------------|
+| P/N  | ~29,381 | —           | —         | —          |
+| 1st  | ~30,680 | 31,702      | 31,848    | 31,871     |
+| 2nd  | ~31,301 | 31,575      | 31,865    | 31,803     |
+| 3rd  | ~31,623 | 31,630      | 31,671    | 31,810     |
+| 4th  | ~31,729 | 31,675      | 31,776    | 31,839     |
+| 5th  | ~31,786 | 31,676      | 31,789    | 31,834     |
+| 6th  | ~31,839 | 31,791      | 31,831    | 31,828     |
+| 7th  | ~31,822 | 31,693      | 31,777    | 31,818     |
+| 8th  | ~31,840 | 31,615      | 31,863    | 31,808     |
+
+Gears 3–8 agree within ±250 across all petrol engines; gears 1–2 show +500–1200 counts driven by higher clutch/launch loads.
+
+---
+
+### ShiftRef_B — Redundant copy with write-lag
+
+ShiftRef_B (bytes 4–5) carries the same value as ShiftRef_A and is decoded identically. Its purpose is to provide a duplicate for EGS cross-check (safety validation).
+
+On B58/F20 firmware a write-order artifact causes ShiftRef_B to lag ShiftRef_A by **exactly one CAN frame (~10 ms)** during rapid deceleration. The EGS compares both fields; if they differ by more than a threshold the frame is considered corrupted. The 1-frame lag is within this tolerance and does not trigger a fault.
+
+On N55 F30 both fields are written synchronously within the same DME task cycle.
+
+---
+
+### ShiftRef_C — Vehicle-dependent third reference
+
+ShiftRef_C (bytes 6–7) encodes different information depending on the DME software:
+
+#### B58/8HP50 and F20/N55: exact alias of ShiftRef_A
+
+On these vehicles ShiftRef_C **= ShiftRef_A on every frame** (R² = 1.0, difference always 0). It appears the B58/F20 DME uses bytes 6–7 as a second write of the same value, possibly for a different EGS consumer or as a reserved placeholder that received the same assignment.
+
+#### N55 F30: independent engine-torque-based reference
+
+On N55 F30 ShiftRef_C is a **separate computation path** with different coefficients:
+
+```
+ShiftRef_C ≈ α × T_Act + β × T_Loss + 31820
+```
+
+Key characteristics:
+- The intercept (~31,820) is **flat across gears 4–8** (variation < 30 counts), independent of gear ratio — unlike ShiftRef_A whose `c` rises with gear.
+- `α ≈ 0.5–0.75` (T_Act dominant, varies by gear/log segment).
+- `β` is small (< 0.3), far smaller than the `a` coefficient in ShiftRef_A.
+- ShiftRef_C ≥ ShiftRef_A at all times.
+
+**CA_diff = ShiftRef_C − ShiftRef_A** by torque state (N55 F30, gears 4–8):
+
+| Torque state | Approx T_Act (Nm) | Approx T_Loss (Nm) | Typical CA_diff (counts) |
+|--------------|------------------|---------------------|--------------------------|
+| Coast/overrun | −30              | −30                 | 0                        |
+| Light accel   | +63              | −25                 | ~10–30                   |
+| Moderate accel| +111             | −20                 | ~30–80                   |
+
+CA_diff is **zero whenever T_Act ≈ T_Loss** (pure coasting, no fuel). It becomes positive and grows proportionally to T_Act when the engine is producing positive torque. The correlation between CA_diff and ShiftRef_A is −0.91: when ShiftRef_A is depressed (low gear, high drag load), CA_diff is largest.
+
+**Physical interpretation:**
+- **ShiftRef_A** = drag/friction-based shift reference: primarily driven by T_Loss (internal resistance). Higher T_Loss → lower ShiftRef_A → EGS holds gear longer (transmission under high load).
+- **ShiftRef_C** (N55 only) = engine-torque-based shift reference: primarily driven by T_Act (actual delivered torque). The gear-independent intercept suggests a simpler computation than ShiftRef_A. The EGS likely uses both signals for kickdown detection and upshift-inhibit: ShiftRef_A captures drivetrain load state while ShiftRef_C captures driver demand.
 
 **Cross-vehicle validation:**
-- **F30 B58 8HP50 (petrol):** same structure. 1st gear produces *highest* signal (32,135 mean) vs N55 where 1st is *lowest* (30,680).
-- **F15 X5 N57Z / F31 320d / G11 (diesel):** `raw = 0xFFFF` — SNA. Confirmed petrol-specific.
+- **F30 N55 8HP45, B58 8HP50, F20:** formula structure confirmed across all petrol logs.
+- **F20 specific:** 0x145 is on **can2** in multi-bus recordings; on can1 in single-bus captures. ID is unpadded (`145` not `0145`). Only `can-2023.02.01-161918.candump` contains active driving data; all other F20 files with 0x145 present show the engine-off standby constant (~32,000).
+- **F15 X5 N57Z / F31 320d / G11 (diesel):** 100% 0xFFFF — SNA confirmed on every frame across all diesel logs.
 
 ---
 
@@ -462,6 +585,14 @@ tailshaft_rpm = (data[5] | (data[6] << 8)) - 2000
 
 Both signals share the 2000 RPM offset: raw 2000 (0x07D0) = 0 RPM. Negative
 decoded values indicate the signal is invalid or the vehicle is stationary.
+
+**SNA pattern:** raw value 0xD007 (53255) on both channels = signal not available (e.g. EGS not ready). After subtracting offset this decodes to 51255 RPM, giving turbine/tailshaft ratio ≈ 1.0 which falsely classifies as 6th gear. Always filter `raw != 0xD007` before gear identification:
+
+```python
+if turbine_raw != 0xD007 and tailshaft_raw != 0xD007:
+    turbine_rpm   = turbine_raw - 2000
+    tailshaft_rpm = tailshaft_raw - 2000
+```
 
 ### Frame 0x1B0 — Turbine & Tailshaft Speed (G11 7-series)
 
